@@ -1,6 +1,7 @@
 processed_data/
 Modification.pdf
 data/
+AGENT.md/
 frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
