@@ -38,11 +38,10 @@ class ConcreteDropout(nn.Module):
         out:输出
         regularization：对应的 KL 项
         """
-        x=x.cuda()
         if self.concrete:
             p = torch.sigmoid(self.p_logit)
         else:
-            p = torch.tensor(self.p_fix).cuda()
+            p = torch.tensor(self.p_fix, device=x.device)
         if (self.dropout and not stop_dropout) or self.Bayes:
             out = layer(self._concrete_dropout(x, p, self.concrete))
         else:
@@ -79,12 +78,12 @@ class ConcreteDropout(nn.Module):
         """
         if not concrete:
             if self.conv == "lin":
-                drop_prob = torch.bernoulli(torch.ones(x.shape).cuda() * p)
+                drop_prob = torch.bernoulli(torch.ones(x.shape, device=x.device) * p)
             elif self.conv == "1D":
-                drop_prob = torch.bernoulli(torch.ones(list(x.size())[0], list(x.size())[1], 1).cuda() * p)
+                drop_prob = torch.bernoulli(torch.ones(list(x.size())[0], list(x.size())[1], 1, device=x.device) * p)
                 drop_prob = drop_prob.repeat(1, 1, list(x.size())[2])
             else:
-                drop_prob = torch.bernoulli(torch.ones(list(x.size())[0], list(x.size())[1], 1, 1).cuda() * p)
+                drop_prob = torch.bernoulli(torch.ones(list(x.size())[0], list(x.size())[1], 1, 1, device=x.device) * p)
                 drop_prob = drop_prob.repeat(1, 1, list(x.size())[2], list(x.size())[3])
 
         else:
@@ -94,10 +93,10 @@ class ConcreteDropout(nn.Module):
             if self.conv == "lin":
                 unif_noise = torch.rand_like(x)
             elif self.conv == "1D":
-                unif_noise = torch.rand(list(x.size())[0], list(x.size())[1], 1).cuda()
+                unif_noise = torch.rand(list(x.size())[0], list(x.size())[1], 1, device=x.device)
                 unif_noise = unif_noise.repeat(1, 1, list(x.size())[2])
             else:
-                unif_noise = torch.rand(list(x.size())[0], list(x.size())[1], 1, 1).cuda()
+                unif_noise = torch.rand(list(x.size())[0], list(x.size())[1], 1, 1, device=x.device)
                 unif_noise = unif_noise.repeat(1, 1, list(x.size())[2], list(x.size())[3])
 
             drop_prob = (torch.log(p + eps)- torch.log(1 - p + eps)+ torch.log(unif_noise + eps)-torch.log(1 - unif_noise + eps))

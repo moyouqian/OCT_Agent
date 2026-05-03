@@ -1,5 +1,10 @@
 processed_data/
 Modification.pdf
+data/
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+backend/.langgraph_api/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -207,3 +212,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+!frontend/src/lib/
+!frontend/src/lib/**
