@@ -14,4 +14,3 @@ test-backend:
 
 build-frontend:
 	cd frontend && npm.cmd run build
-

@@ -25,9 +25,21 @@ MIN_FREE_GPU_MEMORY_GB = float(os.getenv("MIN_FREE_GPU_MEMORY_GB", "2"))
 
 @lru_cache(maxsize=1)
 def get_llm() -> ChatOpenAI:
-    api_key = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("GROQ_API_BASE") or os.getenv("OPENAI_API_BASE")
-    model = os.getenv("GROQ_API_MODEL") or os.getenv("MODEL")
+    api_key = (
+        os.getenv("SILICONFLOW_API_KEY")
+        or os.getenv("GROQ_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+    )
+    base_url = (
+        os.getenv("SILICONFLOW_API_BASE")
+        or os.getenv("GROQ_API_BASE")
+        or os.getenv("OPENAI_API_BASE")
+    )
+    model = (
+        os.getenv("SILICONFLOW_API_MODEL")
+        or os.getenv("GROQ_API_MODEL")
+        or os.getenv("MODEL")
+    )
 
     missing = [
         name
@@ -40,7 +52,10 @@ def get_llm() -> ChatOpenAI:
     ]
     if missing:
         raise RuntimeError(
-            "Missing chat model configuration: " + ", ".join(missing)
+            "Missing chat model configuration. Prefer setting "
+            "SILICONFLOW_API_KEY, SILICONFLOW_API_BASE, and "
+            "SILICONFLOW_API_MODEL. Missing: "
+            + ", ".join(missing)
         )
 
     return ChatOpenAI(
@@ -49,4 +64,3 @@ def get_llm() -> ChatOpenAI:
         base_url=base_url,
         temperature=0,
     )
-

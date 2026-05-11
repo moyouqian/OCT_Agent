@@ -380,7 +380,7 @@ input[type="text"] {
 
 .input-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 10px;
   align-items: stretch;
 }
@@ -409,8 +409,29 @@ input[type="text"] {
   cursor: pointer;
 }
 
+.research-button {
+  min-width: 148px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid #8fb6ff;
+  border-radius: 8px;
+  color: #1d4ed8;
+  background: #eff6ff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.research-button.active {
+  color: #ffffff;
+  border-color: #0f766e;
+  background: #0f766e;
+}
+
 .run-button:disabled,
-.attachment-button:disabled {
+.attachment-button:disabled,
+.research-button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }

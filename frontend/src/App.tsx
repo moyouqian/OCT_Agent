@@ -1,6 +1,6 @@
 import { useStream } from "@langchain/langgraph-sdk/react";
 import type { Message } from "@langchain/langgraph-sdk";
-import { Bot, Play, Square } from "lucide-react";
+import { Bot, Play, Search, Square } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -79,6 +79,7 @@ export default function App() {
   const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [deepResearchOnce, setDeepResearchOnce] = useState(false);
   const messageListRef = useRef<HTMLElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const replaceNextResultsRef = useRef(false);
@@ -93,6 +94,7 @@ export default function App() {
     physical_params: unknown;
     visualization_enabled: boolean;
     show_thinking: boolean;
+    requested_sub_agent?: "deep_research" | null;
   }>({
     apiUrl,
     assistantId: "agent",
@@ -181,7 +183,9 @@ export default function App() {
     const prompt = rawText || (files.length ? "请处理本轮附件。" : "");
     if (!prompt) return;
     setError(null);
-    const shouldReplaceResults = mayGenerateResult(prompt, files, settings);
+    const requestedSubAgent = deepResearchOnce ? "deep_research" : null;
+    const shouldReplaceResults =
+      requestedSubAgent === "deep_research" ? false : mayGenerateResult(prompt, files, settings);
     if (shouldReplaceResults) {
       replaceNextResultsRef.current = true;
       setResults([]);
@@ -227,11 +231,13 @@ export default function App() {
       },
       visualization_enabled: settings.visualizationEnabled,
       show_thinking: settings.showThinking,
+      requested_sub_agent: requestedSubAgent,
     });
 
     setInput("");
     setFiles([]);
-  }, [fileIds, files, input, results, settings, thread]);
+    setDeepResearchOnce(false);
+  }, [deepResearchOnce, fileIds, files, input, results, settings, thread]);
 
   const canSend = input.trim().length > 0 || files.length > 0;
   const lastMessage = displayMessages[displayMessages.length - 1];
@@ -315,6 +321,17 @@ export default function App() {
                 }
               }}
             />
+            <button
+              className={`research-button ${deepResearchOnce ? "active" : ""}`}
+              type="button"
+              onClick={() => setDeepResearchOnce((current) => !current)}
+              disabled={thread.isLoading}
+              title="下一条消息使用 Deep Research"
+              aria-pressed={deepResearchOnce}
+            >
+              <Search size={18} />
+              <span>Deep Research</span>
+            </button>
             <button
               className="run-button"
               type="button"
