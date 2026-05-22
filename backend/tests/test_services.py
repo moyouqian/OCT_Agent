@@ -301,3 +301,53 @@ def test_structured_helper_uses_json_schema_first():
 
     assert parsed.topics == ["A"]
     assert model.calls[0] == (ResearchPlan, "json_schema", True)
+
+
+_PROVIDER_ENV_VARS = [
+    "SILICONFLOW_API_KEY",
+    "SILICONFLOW_API_BASE",
+    "SILICONFLOW_API_MODEL",
+    "GROQ_API_KEY",
+    "GROQ_API_BASE",
+    "GROQ_API_MODEL",
+    "OPENAI_API_KEY",
+    "OPENAI_API_BASE",
+    "MODEL",
+]
+
+
+def test_get_llm_selects_one_provider_group(monkeypatch):
+    from agent import config
+
+    for name in _PROVIDER_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    # 仅设置 Groq 一组；SiliconFlow 的 base/model 故意不设，验证不会被串入。
+    monkeypatch.setenv("GROQ_API_KEY", "groq-key")
+    monkeypatch.setenv("GROQ_API_BASE", "https://groq.example/v1")
+    monkeypatch.setenv("GROQ_API_MODEL", "groq-model")
+    config.get_llm.cache_clear()
+
+    llm = config.get_llm()
+
+    assert llm.model_name == "groq-model"
+    assert str(llm.openai_api_base) == "https://groq.example/v1"
+    config.get_llm.cache_clear()
+
+
+def test_get_llm_raises_when_selected_provider_incomplete(monkeypatch):
+    from agent import config
+
+    for name in _PROVIDER_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    # 选中 SiliconFlow（有 key），但缺 base/model -> 不应回退到其他 provider。
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "sf-key")
+    config.get_llm.cache_clear()
+
+    try:
+        with_error = False
+        config.get_llm()
+    except RuntimeError as exc:
+        with_error = True
+        assert "SiliconFlow" in str(exc)
+    assert with_error, "incomplete provider config should raise RuntimeError"
+    config.get_llm.cache_clear()

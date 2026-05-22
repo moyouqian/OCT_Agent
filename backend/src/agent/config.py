@@ -23,44 +23,43 @@ INFERENCE_DEVICE = os.getenv("INFERENCE_DEVICE", "auto")
 MIN_FREE_GPU_MEMORY_GB = float(os.getenv("MIN_FREE_GPU_MEMORY_GB", "2"))
 
 
+# LLM provider 优先级。按整组选择，避免 api_key/base_url/model 跨厂商错配：
+# 选第一个设置了 api_key 的 provider，其 base_url/model 取自同一组环境变量。
+PROVIDERS: tuple[tuple[str, str, str, str], ...] = (
+    ("SiliconFlow", "SILICONFLOW_API_KEY", "SILICONFLOW_API_BASE", "SILICONFLOW_API_MODEL"),
+    ("Groq", "GROQ_API_KEY", "GROQ_API_BASE", "GROQ_API_MODEL"),
+    ("OpenAI", "OPENAI_API_KEY", "OPENAI_API_BASE", "MODEL"),
+)
+
+
 @lru_cache(maxsize=1)
 def get_llm() -> ChatOpenAI:
-    api_key = (
-        os.getenv("SILICONFLOW_API_KEY")
-        or os.getenv("GROQ_API_KEY")
-        or os.getenv("OPENAI_API_KEY")
-    )
-    base_url = (
-        os.getenv("SILICONFLOW_API_BASE")
-        or os.getenv("GROQ_API_BASE")
-        or os.getenv("OPENAI_API_BASE")
-    )
-    model = (
-        os.getenv("SILICONFLOW_API_MODEL")
-        or os.getenv("GROQ_API_MODEL")
-        or os.getenv("MODEL")
-    )
-
-    missing = [
-        name
-        for name, value in {
-            "api_key": api_key,
-            "base_url": base_url,
-            "model": model,
-        }.items()
-        if not value
-    ]
-    if missing:
-        raise RuntimeError(
-            "Missing chat model configuration. Prefer setting "
-            "SILICONFLOW_API_KEY, SILICONFLOW_API_BASE, and "
-            "SILICONFLOW_API_MODEL. Missing: "
-            + ", ".join(missing)
+    for name, key_env, base_env, model_env in PROVIDERS:
+        api_key = os.getenv(key_env)
+        if not api_key:
+            continue
+        base_url = os.getenv(base_env)
+        model = os.getenv(model_env)
+        missing = [
+            env_name
+            for env_name, value in ((base_env, base_url), (model_env, model))
+            if not value
+        ]
+        if missing:
+            raise RuntimeError(
+                f"Provider {name} is selected (found {key_env}) but its "
+                f"configuration is incomplete. Missing: {', '.join(missing)}"
+            )
+        temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
+        return ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=temperature,
         )
 
-    return ChatOpenAI(
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-        temperature=0,
+    raise RuntimeError(
+        "Missing chat model configuration. Set one provider's API key, base URL, "
+        "and model. Prefer SILICONFLOW_API_KEY, SILICONFLOW_API_BASE, and "
+        "SILICONFLOW_API_MODEL."
     )
