@@ -116,56 +116,46 @@ def _source_material(results: list[Any]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def clarify_or_write_brief(state: OctGraphState) -> OctGraphState:
-    """Clarify ambiguous research requests or produce a research brief."""
+def _pending_research_state(message: str) -> OctGraphState:
+    """构造"仍需用户补充信息"的状态：发出一条 AI 消息并保持 research_pending。"""
+    return {
+        "messages": [AIMessage(content=message)],
+        "research_pending": True,
+        "research_brief": "",
+        "research_topics": [],
+        "research_notes": [],
+        "final_report": "",
+        "requested_sub_agent": None,
+    }
 
-    messages = state.get("messages", [])
-    buffer = get_buffer_string(messages)
-    llm = get_llm()
-    latest_text = _latest_user_text(state)
 
-    if not state.get("research_pending"):
-        if _needs_research_clarification(latest_text):
-            decision = ClarifyWithUser(
-                need_clarification=True,
-                question=_clarification_question(latest_text),
-                verification="",
-            )
-        else:
-            clarify_messages = [
-                HumanMessage(
-                    content=RESEARCH_CLARIFY_PROMPT.format(
-                        date=_today(),
-                        messages=buffer,
-                    )
-                )
-            ]
-            decision = invoke_structured_json_schema(
-                llm,
-                ClarifyWithUser,
-                clarify_messages,
-                fallback_fn=lambda _: ClarifyWithUser(
-                    need_clarification=False,
-                    question="",
-                    verification="研究目标已足够清晰，将开始 deep research。",
-                ),
-            )
-        if decision.need_clarification:
-            return {
-                "messages": [AIMessage(content=decision.question)],
-                "research_pending": True,
-                "research_brief": "",
-                "research_topics": [],
-                "research_notes": [],
-                "final_report": "",
-                "requested_sub_agent": None,
-            }
-
-    brief_prompt = RESEARCH_BRIEF_PROMPT.format(
-        date=_today(),
-        messages=buffer,
+def _decide_clarification(llm: Any, buffer: str, latest_text: str) -> ClarifyWithUser:
+    """判定研究请求是否需要先向用户澄清。"""
+    if _needs_research_clarification(latest_text):
+        return ClarifyWithUser(
+            need_clarification=True,
+            question=_clarification_question(latest_text),
+            verification="",
+        )
+    clarify_messages = [
+        HumanMessage(content=RESEARCH_CLARIFY_PROMPT.format(date=_today(), messages=buffer))
+    ]
+    return invoke_structured_json_schema(
+        llm,
+        ClarifyWithUser,
+        clarify_messages,
+        fallback_fn=lambda _: ClarifyWithUser(
+            need_clarification=False,
+            question="",
+            verification="研究目标已足够清晰，将开始 deep research。",
+        ),
     )
-    brief = invoke_structured_json_schema(
+
+
+def _write_brief(llm: Any, buffer: str, latest_text: str) -> ResearchQuestion:
+    """根据对话历史生成结构化研究 brief。"""
+    brief_prompt = RESEARCH_BRIEF_PROMPT.format(date=_today(), messages=buffer)
+    return invoke_structured_json_schema(
         llm,
         ResearchQuestion,
         [HumanMessage(content=brief_prompt)],
@@ -173,16 +163,25 @@ def clarify_or_write_brief(state: OctGraphState) -> OctGraphState:
             research_brief=_invoke_text(brief_prompt) or latest_text or "无法生成研究 brief。"
         ),
     )
+
+
+def clarify_or_write_brief(state: OctGraphState) -> OctGraphState:
+    """Clarify ambiguous research requests or produce a research brief."""
+
+    buffer = get_buffer_string(state.get("messages", []))
+    llm = get_llm()
+    latest_text = _latest_user_text(state)
+
+    if not state.get("research_pending"):
+        decision = _decide_clarification(llm, buffer, latest_text)
+        if decision.need_clarification:
+            return _pending_research_state(decision.question)
+
+    brief = _write_brief(llm, buffer, latest_text)
     if not brief.research_brief.strip():
-        return {
-            "messages": [AIMessage(content="无法生成有效的 deep research brief，请补充更明确的研究主题。")],
-            "research_pending": True,
-            "research_brief": "",
-            "research_topics": [],
-            "research_notes": [],
-            "final_report": "",
-            "requested_sub_agent": None,
-        }
+        return _pending_research_state(
+            "无法生成有效的 deep research brief，请补充更明确的研究主题。"
+        )
     return {
         "research_brief": brief.research_brief,
         "research_topics": [],

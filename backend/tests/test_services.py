@@ -22,7 +22,7 @@ from agent.services.storage import (
     save_array_result,
 )
 from agent.services.paths import RESULTS_INDEX_PATH
-from agent.tools import compute_vector_strain
+from agent.tools import bnn_method, cnn_method, compute_vector_strain
 from agent.graph import _research_messages, infer_route_from_text, self_rag_node, supervisor
 from agent.prompts import SUPERVISOR_PROMPT
 from agent.research.graph import _needs_research_clarification, _parse_items
@@ -142,6 +142,28 @@ def test_recover_result_rejects_paths_outside_runs(tmp_path):
         assert "data/runs" in str(exc)
     else:
         raise AssertionError("recover_result should reject paths outside data/runs")
+
+
+def test_compute_vector_strain_rejects_invalid_params(tmp_path):
+    mat_path = tmp_path / "phase.mat"
+    sio.savemat(mat_path, {"phase": np.ones((40, 40))})
+
+    for bad_kwargs in ({"Nx": 0}, {"Nz": 0}, {"g": 0}):
+        try:
+            raised = False
+            compute_vector_strain(str(mat_path), **bad_kwargs)
+        except ValueError:
+            raised = True
+        assert raised, f"compute_vector_strain should reject {bad_kwargs}"
+
+
+def test_strain_tools_return_error_text_when_no_file():
+    # 无 file_id 且 file_ids 为空 -> 共享骨架应返回友好的中文错误文案而非抛异常。
+    cnn_result = cnn_method.func(run_dir="", file_ids=[], physical_params={}, file_id="", file_path="")
+    bnn_result = bnn_method.func(run_dir="", file_ids=[], physical_params={}, file_id="", file_path="")
+
+    assert "CNN" in cnn_result and "错误" in cnn_result
+    assert "BNN" in bnn_result and "错误" in bnn_result
 
 
 def test_requested_deep_research_routes_without_llm():

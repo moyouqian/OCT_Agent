@@ -38,21 +38,28 @@ class PhysicalParams(TypedDict, total=False):
 
 
 class OctGraphState(TypedDict, total=False):
+    # --- 共享 / 编排 ---
     messages: Annotated[list[BaseMessage], add_messages]
     file_ids: list[str]
     run_dir: str
     result_refs: Annotated[list[ResultRef], operator.add]
     sub_agent: Literal["strain_estimation", "deep_research", "self_rag", "chat"]
     requested_sub_agent: Literal["strain_estimation", "deep_research", "self_rag", "chat"] | None
+
+    # --- strain_estimation 子图专用 ---
     strain_settings: StrainSettings
     physical_params: PhysicalParams
     visualization_enabled: bool
     show_thinking: bool
+
+    # --- deep_research 子图专用 ---
     research_pending: bool
     research_brief: str
     research_topics: list[str]
     research_notes: list[str]
     final_report: str
+
+    # --- self_rag 子图专用 ---
     self_rag_citations: list[dict[str, Any]]
     self_rag_trace: dict[str, Any]
     self_rag_error: str

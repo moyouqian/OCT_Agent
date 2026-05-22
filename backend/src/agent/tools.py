@@ -88,6 +88,10 @@ def compute_vector_strain(
     g: int = 1,
     physical_params: dict[str, Any] | None = None,
 ) -> np.ndarray:
+    if Nx <= 0 or Nz <= 0:
+        raise ValueError("Nx 与 Nz 必须为正整数。")
+    if g < 1:
+        raise ValueError("g 必须 >= 1。")
     _, matrix = load_single_matrix(file_path)
     phase_data = np.array(matrix, dtype=float)
     phase_data[phase_data == 0] = np.nan
@@ -134,6 +138,8 @@ def compute_bnn_strain(
     MC_test: int = 50,
     physical_params: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
+    if MC_test < 1:
+        raise ValueError("MC_test 必须 >= 1。")
     _, wrapped_data = load_single_matrix(file_path)
     wrapped_data = crop_to_divisible_by_32(wrapped_data)
     device = get_inference_device()
