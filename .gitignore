@@ -1,11 +1,25 @@
-processed_data/
-Modification.pdf
-data/
+# Project-local generated data and large runtime artifacts
+/data/
+/processed_data/
+/backend/data/
+/backend/.langgraph_api/
+/Modification.pdf
 /AGENT.md
+
+# Local dev server output
+/backend/dev-*.log
+/frontend/dev-*.log
+
+# Frontend build/dependency output
 frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
-backend/.langgraph_api/
+frontend/.vite/
+
+# Built-in Self-RAG stores and upload workspace
+backend/data/self_rag/
+backend/data/runs/
+backend/data/uploads/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

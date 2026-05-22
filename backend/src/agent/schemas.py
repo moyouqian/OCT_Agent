@@ -42,7 +42,7 @@ class OctGraphState(TypedDict, total=False):
     file_ids: list[str]
     run_dir: str
     result_refs: Annotated[list[ResultRef], operator.add]
-    sub_agent: Literal["strain_estimation", "deep_research", "chat"]
+    sub_agent: Literal["strain_estimation", "deep_research", "self_rag", "chat"]
     requested_sub_agent: Literal["deep_research"] | None
     strain_settings: StrainSettings
     physical_params: PhysicalParams
@@ -53,9 +53,12 @@ class OctGraphState(TypedDict, total=False):
     research_topics: list[str]
     research_notes: list[str]
     final_report: str
+    self_rag_citations: list[dict[str, Any]]
+    self_rag_trace: dict[str, Any]
+    self_rag_error: str
 
 
 class TaskAssignment(TypedDict):
     """Decision on what task type to execute."""
 
-    update_type: Literal["strain_estimation", "deep_research", "chat"]
+    update_type: Literal["strain_estimation", "deep_research", "self_rag", "chat"]

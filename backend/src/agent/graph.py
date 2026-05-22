@@ -17,6 +17,7 @@ from agent.schemas import OctGraphState, TaskAssignment
 from agent.services.memory import forget, memory_summary, remember
 from agent.services.models import DEFAULT_BANDWIDTH, DEFAULT_REFRACTIVE_INDEX, DEFAULT_WAVELENGTH
 from agent.services.storage import make_run_dir
+from agent.self_rag import run_knowledge_query, self_rag_message
 from agent.tools import TOOLS
 
 
@@ -185,9 +186,12 @@ def supervisor(state: OctGraphState) -> OctGraphState:
         return {"sub_agent": "deep_research"}
     if selected_method and state.get("file_ids"):
         return {"sub_agent": "strain_estimation"}
+    if _is_memory_command(text):
+        return {"sub_agent": "chat"}
     inferred = infer_route_from_text(text)
     if inferred is not None:
         return {"sub_agent": inferred}
+    return {"sub_agent": "self_rag"}
 
     sys_msg = SystemMessage(content=SUPERVISOR_PROMPT)
     try:
@@ -201,8 +205,17 @@ def supervisor(state: OctGraphState) -> OctGraphState:
     return {"sub_agent": update_type}
 
 
-def infer_route_from_text(text: str) -> Literal["strain_estimation", "deep_research"] | None:
+def infer_route_from_text(text: str) -> Literal["strain_estimation", "deep_research", "self_rag"] | None:
     lowered = text.lower()
+    if any(
+        token in lowered
+        for token in ["self_rag", "self-rag", "rag", "知识库", "知識庫", "本地检索", "本地知识", "已索引", "论文库"]
+    ):
+        return "self_rag"
+    if any(token in lowered for token in ["应变", "矢量", "热力图"]):
+        return "strain_estimation"
+    if any(token in lowered for token in ["联网", "文献检索", "综述", "调研", "研究报告", "最新", "引用来源"]):
+        return "deep_research"
     if any(
         token in lowered
         for token in ["应变", "strain", "cnn", "bnn", "矢量", "vector", ".mat", "phase", "热力图"]
@@ -225,10 +238,28 @@ def infer_route_from_text(text: str) -> Literal["strain_estimation", "deep_resea
         ]
     ):
         return "deep_research"
+    if any(
+        token in lowered
+        for token in [
+            "self_rag",
+            "self-rag",
+            "rag",
+            "知识库",
+            "知識庫",
+            "本地检索",
+            "本地檢索",
+            "本地知识",
+            "本地知識",
+            "已索引",
+            "论文库",
+            "論文庫",
+        ]
+    ):
+        return "self_rag"
     return None
 
 
-def route_for_subagent(state: OctGraphState) -> Literal["strain_estimation", "deep_research", "chat"]:
+def route_for_subagent(state: OctGraphState) -> Literal["strain_estimation", "deep_research", "self_rag", "chat"]:
     return state["sub_agent"]
 
 
@@ -298,11 +329,41 @@ def chat(state: OctGraphState) -> OctGraphState:
     return {"messages": [result]}
 
 
+def _is_memory_command(text: str) -> bool:
+    stripped = text.strip()
+    return stripped.startswith(("记住", "忘记", "璁颁綇", "蹇樿")) or "查看记忆" in stripped or "鏌ョ湅璁板繂" in stripped
+
+
+def self_rag_node(state: OctGraphState) -> OctGraphState:
+    question = _latest_user_text(state)
+    try:
+        result = run_knowledge_query(question)
+    except Exception as exc:
+        result = {"error": str(exc), "documents": [], "generation": "", "_used_chat_fallback": True}
+
+    if result.get("_used_chat_fallback"):
+        fallback = chat(state)
+        return {
+            **fallback,
+            "self_rag_citations": result.get("citations", []),
+            "self_rag_trace": {"retrieval_trace": result.get("retrieval_trace", [])},
+            "self_rag_error": str(result.get("error") or ""),
+        }
+
+    return {
+        "messages": [self_rag_message(result)],
+        "self_rag_citations": result.get("citations", []),
+        "self_rag_trace": {"retrieval_trace": result.get("retrieval_trace", [])},
+        "self_rag_error": str(result.get("error") or ""),
+    }
+
+
 agent_builder = StateGraph(OctGraphState)
 agent_builder.add_node("supervisor", supervisor)
 agent_builder.add_node("chat", chat)
 agent_builder.add_node("strain_estimation", strain_estimation)
 agent_builder.add_node("deep_research", deep_research_node)
+agent_builder.add_node("self_rag", self_rag_node)
 agent_builder.add_edge(START, "supervisor")
 agent_builder.add_conditional_edges(
     "supervisor",
@@ -310,11 +371,13 @@ agent_builder.add_conditional_edges(
     {
         "strain_estimation": "strain_estimation",
         "deep_research": "deep_research",
+        "self_rag": "self_rag",
         "chat": "chat",
     },
 )
 agent_builder.add_edge("chat", END)
 agent_builder.add_edge("strain_estimation", END)
 agent_builder.add_edge("deep_research", END)
+agent_builder.add_edge("self_rag", END)
 
 graph = agent_builder.compile(name="oct-agent")

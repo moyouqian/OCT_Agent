@@ -23,11 +23,14 @@ from agent.services.storage import (
 )
 from agent.services.paths import RESULTS_INDEX_PATH
 from agent.tools import compute_vector_strain
-from agent.graph import _research_messages, infer_route_from_text, supervisor
+from agent.graph import _research_messages, infer_route_from_text, self_rag_node, supervisor
 from agent.prompts import SUPERVISOR_PROMPT
 from agent.research.graph import _needs_research_clarification, _parse_items
 from agent.research.schemas import ResearchPlan
+from agent.self_rag import get_self_rag_config
 from agent.utils.structured import invoke_structured_json_schema
+from agent.app import app
+from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage
 
 
@@ -156,6 +159,69 @@ def test_route_keywords_cover_research_and_strain():
     assert infer_route_from_text("帮我做一份 OCT 文献综述") == "deep_research"
     assert infer_route_from_text("对 phase.mat 做 CNN 应变计算") == "strain_estimation"
     assert infer_route_from_text("你好") is None
+
+
+def test_route_keywords_cover_new_self_rag_and_chinese_research():
+    assert infer_route_from_text("请联网调研 OCT 最新进展") == "deep_research"
+    assert infer_route_from_text("请基于本地知识库回答 phase unwrapping") == "self_rag"
+
+
+def test_default_supervisor_routes_to_self_rag_without_llm():
+    result = supervisor({"messages": [HumanMessage(content="你好，介绍一下 OCT")]})
+
+    assert result["sub_agent"] == "self_rag"
+
+
+def test_self_rag_falls_back_to_chat(monkeypatch):
+    monkeypatch.setattr(
+        "agent.graph.run_knowledge_query",
+        lambda question: {"error": "empty index", "documents": [], "generation": "", "_used_chat_fallback": True},
+    )
+    monkeypatch.setattr("agent.graph.chat", lambda state: {"messages": [AIMessage(content="chat fallback")]})
+
+    result = self_rag_node({"messages": [HumanMessage(content="普通问题")]})
+
+    assert result["messages"][0].content == "chat fallback"
+    assert result["self_rag_error"] == "empty index"
+
+
+def test_self_rag_config_uses_backend_internal_data_dir():
+    config = get_self_rag_config()
+    normalized_sqlite = config.sqlite_path.replace("\\", "/")
+    normalized_chroma = config.chroma_dir.replace("\\", "/")
+
+    assert "backend/data/self_rag" in normalized_sqlite
+    assert normalized_chroma.endswith("backend/data/self_rag/chroma_store")
+
+
+def test_knowledge_api_accepts_upload_and_exposes_job(monkeypatch):
+    monkeypatch.setattr(
+        "agent.app.ingest_knowledge_file",
+        lambda path: {"skipped": 0, "total_parents": 1, "total_children": 1, "ingested_children": 1},
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/knowledge/upload",
+        files={"file": ("note.md", b"# Test\n\nKnowledge entry.", "text/markdown")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    job = client.get(f"/api/knowledge/jobs/{payload['job_id']}").json()
+    assert job["status"] == "succeeded"
+    assert job["result"]["ingested_children"] == 1
+
+
+def test_knowledge_api_rejects_unsupported_upload():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/knowledge/upload",
+        files={"file": ("image.png", b"not supported", "image/png")},
+    )
+
+    assert response.status_code == 400
 
 
 def test_prompts_are_importable():
