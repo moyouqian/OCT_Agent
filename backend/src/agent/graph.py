@@ -11,9 +11,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
 from agent.config import get_llm
-from agent.prompts import SUPERVISOR_PROMPT, build_chat_prompt, build_strain_prompt
+from agent.prompts import build_chat_prompt, build_strain_prompt
 from agent.research import deep_research
-from agent.schemas import OctGraphState, TaskAssignment
+from agent.schemas import OctGraphState
 from agent.services.memory import forget, memory_summary, remember
 from agent.services.models import DEFAULT_BANDWIDTH, DEFAULT_REFRACTIVE_INDEX, DEFAULT_WAVELENGTH
 from agent.services.storage import make_run_dir
@@ -175,87 +175,94 @@ strain_builder.add_edge("visualize", END)
 strain_estimation = strain_builder.compile(name="strain-estimation")
 
 
+# 关键词路由表。每个子图一份关键词集合，去重后集中维护。
+# 匹配顺序由 ROUTE_PRIORITY 决定：self_rag 在前，使"本地知识库 ... phase"
+# 这类同时含多类关键词的请求优先归入知识库检索而非应变计算。
+ROUTE_KEYWORDS: dict[str, list[str]] = {
+    "self_rag": [
+        "self_rag",
+        "self-rag",
+        "rag",
+        "知识库",
+        "知識庫",
+        "本地检索",
+        "本地檢索",
+        "本地知识",
+        "本地知識",
+        "已索引",
+        "论文库",
+        "論文庫",
+    ],
+    "deep_research": [
+        "deep research",
+        "deep_research",
+        "联网",
+        "文献检索",
+        "文献",
+        "检索",
+        "综述",
+        "调研",
+        "研究报告",
+        "引用来源",
+        "引用",
+        "来源",
+        "论文",
+        "最新",
+    ],
+    "strain_estimation": [
+        "应变",
+        "strain",
+        "cnn",
+        "bnn",
+        "矢量",
+        "vector",
+        ".mat",
+        "phase",
+        "热力图",
+    ],
+}
+
+# 关键词匹配优先级。顺序敏感：靠前的子图先匹配。
+ROUTE_PRIORITY: tuple[str, ...] = ("self_rag", "strain_estimation", "deep_research")
+
+
 def supervisor(state: OctGraphState) -> OctGraphState:
-    settings = state.get("strain_settings", {})
-    selected_method = any(settings.get(key) for key in ("vector", "cnn", "bnn"))
-    text = _latest_user_text(state)
+    """混合分层路由：显式请求 > 状态标志 > 强信号 > 关键词 > 兜底。
+
+    优先级链（自上而下，命中即返回）：
+      1. 显式请求 ``requested_sub_agent``（如 UI 按钮指定的子图）。
+      2. 状态标志 ``research_pending``（深度研究多轮澄清进行中）。
+      3. 强信号：已选定应变方法且已上传文件 -> strain；记忆命令 -> chat。
+      4. 关键词快速匹配（见 ``infer_route_from_text``）。
+      5. 兜底 -> self_rag（本地知识库检索）。
+    当前不引入 LLM 路由层，关键词兜底足以覆盖科研原型场景。
+    """
     requested = state.get("requested_sub_agent")
-    if requested == "deep_research":
-        return {"sub_agent": "deep_research"}
+    if requested:
+        return {"sub_agent": requested}
     if state.get("research_pending"):
         return {"sub_agent": "deep_research"}
+
+    settings = state.get("strain_settings", {})
+    selected_method = any(settings.get(key) for key in ("vector", "cnn", "bnn"))
     if selected_method and state.get("file_ids"):
         return {"sub_agent": "strain_estimation"}
+
+    text = _latest_user_text(state)
     if _is_memory_command(text):
         return {"sub_agent": "chat"}
+
     inferred = infer_route_from_text(text)
     if inferred is not None:
         return {"sub_agent": inferred}
     return {"sub_agent": "self_rag"}
 
-    sys_msg = SystemMessage(content=SUPERVISOR_PROMPT)
-    try:
-        response = get_llm().bind_tools([TaskAssignment]).invoke([sys_msg] + state["messages"])
-    except Exception:
-        return {"sub_agent": "chat"}
-    if response.tool_calls:
-        update_type = response.tool_calls[0]["args"]["update_type"]
-    else:
-        update_type = "chat"
-    return {"sub_agent": update_type}
-
 
 def infer_route_from_text(text: str) -> Literal["strain_estimation", "deep_research", "self_rag"] | None:
     lowered = text.lower()
-    if any(
-        token in lowered
-        for token in ["self_rag", "self-rag", "rag", "知识库", "知識庫", "本地检索", "本地知识", "已索引", "论文库"]
-    ):
-        return "self_rag"
-    if any(token in lowered for token in ["应变", "矢量", "热力图"]):
-        return "strain_estimation"
-    if any(token in lowered for token in ["联网", "文献检索", "综述", "调研", "研究报告", "最新", "引用来源"]):
-        return "deep_research"
-    if any(
-        token in lowered
-        for token in ["应变", "strain", "cnn", "bnn", "矢量", "vector", ".mat", "phase", "热力图"]
-    ):
-        return "strain_estimation"
-    if any(
-        token in lowered
-        for token in [
-            "deep research",
-            "deep_research",
-            "文献",
-            "检索",
-            "综述",
-            "调研",
-            "研究报告",
-            "引用",
-            "来源",
-            "论文",
-            "最新",
-        ]
-    ):
-        return "deep_research"
-    if any(
-        token in lowered
-        for token in [
-            "self_rag",
-            "self-rag",
-            "rag",
-            "知识库",
-            "知識庫",
-            "本地检索",
-            "本地檢索",
-            "本地知识",
-            "本地知識",
-            "已索引",
-            "论文库",
-            "論文庫",
-        ]
-    ):
-        return "self_rag"
+    for route in ROUTE_PRIORITY:
+        if any(token in lowered for token in ROUTE_KEYWORDS[route]):
+            return route  # type: ignore[return-value]
     return None
 
 

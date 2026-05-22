@@ -155,6 +155,17 @@ def test_requested_deep_research_routes_without_llm():
     assert result["sub_agent"] == "deep_research"
 
 
+def test_requested_sub_agent_supports_all_subgraphs():
+    for requested in ("strain_estimation", "self_rag", "chat"):
+        result = supervisor(
+            {
+                "messages": [HumanMessage(content="随便一句话")],
+                "requested_sub_agent": requested,
+            }
+        )
+        assert result["sub_agent"] == requested
+
+
 def test_route_keywords_cover_research_and_strain():
     assert infer_route_from_text("帮我做一份 OCT 文献综述") == "deep_research"
     assert infer_route_from_text("对 phase.mat 做 CNN 应变计算") == "strain_estimation"

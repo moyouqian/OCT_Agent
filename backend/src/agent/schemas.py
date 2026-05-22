@@ -43,7 +43,7 @@ class OctGraphState(TypedDict, total=False):
     run_dir: str
     result_refs: Annotated[list[ResultRef], operator.add]
     sub_agent: Literal["strain_estimation", "deep_research", "self_rag", "chat"]
-    requested_sub_agent: Literal["deep_research"] | None
+    requested_sub_agent: Literal["strain_estimation", "deep_research", "self_rag", "chat"] | None
     strain_settings: StrainSettings
     physical_params: PhysicalParams
     visualization_enabled: bool
