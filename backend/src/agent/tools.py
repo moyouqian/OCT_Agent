@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Annotated, Any
+from typing import Annotated, Any, Callable
 
 import numpy as np
 import torch
@@ -48,6 +48,28 @@ def _select_file_id(file_id: str | None, file_ids: list[str] | None) -> str | No
     if file_ids and len(file_ids) == 1:
         return file_ids[0]
     return None
+
+
+def _run_strain_tool(
+    method: str,
+    error_label: str,
+    file_id: str,
+    file_ids: list[str] | None,
+    file_path: str,
+    compute_and_save: Callable[[str, str], dict[str, Any]],
+) -> str:
+    """三种应变工具共享的执行骨架：解析文件 -> 计算并保存 -> JSON 返回。
+
+    ``compute_and_save`` 接收 ``(resolved_path, resolved_file_id)``，负责各方法
+    特有的 result_key 构造、计算与结果保存，返回 ref 字典。
+    """
+    try:
+        selected_file_id = _select_file_id(file_id, file_ids)
+        resolved_file_id, resolved_path = resolve_file_reference(selected_file_id, file_path or None)
+        ref = compute_and_save(resolved_path, resolved_file_id)
+        return json.dumps({"status": "success", "method": method, "ref": ref}, ensure_ascii=False)
+    except Exception as exc:
+        return f"{error_label}计算过程中发生错误: {exc}"
 
 
 def _physical_kwargs(physical_params: dict[str, Any] | None) -> dict[str, float]:
@@ -153,9 +175,7 @@ def vector_method_g(
 ) -> str:
     """使用矢量法对上传的 .mat 相位文件执行应变计算。"""
 
-    try:
-        selected_file_id = _select_file_id(file_id, file_ids)
-        resolved_file_id, resolved_path = resolve_file_reference(selected_file_id, file_path or None)
+    def _compute(resolved_path: str, resolved_file_id: str) -> dict[str, Any]:
         result_key = make_result_key("vector", Nx=Nx, Nz=Nz, g=g)
         strain = compute_vector_strain(
             resolved_path,
@@ -164,10 +184,9 @@ def vector_method_g(
             g=g,
             physical_params=physical_params,
         )
-        ref = save_array_result(run_dir, resolved_path, result_key, strain, resolved_file_id)
-        return json.dumps({"status": "success", "method": "vector", "ref": ref}, ensure_ascii=False)
-    except Exception as exc:
-        return f"矢量法计算过程中发生错误: {exc}"
+        return save_array_result(run_dir, resolved_path, result_key, strain, resolved_file_id)
+
+    return _run_strain_tool("vector", "矢量法", file_id, file_ids, file_path, _compute)
 
 
 @tool
@@ -180,15 +199,12 @@ def cnn_method(
 ) -> str:
     """使用 CNN 方法对上传的 .mat 相位文件执行应变计算。"""
 
-    try:
-        selected_file_id = _select_file_id(file_id, file_ids)
-        resolved_file_id, resolved_path = resolve_file_reference(selected_file_id, file_path or None)
+    def _compute(resolved_path: str, resolved_file_id: str) -> dict[str, Any]:
         result_key = make_result_key("cnn")
         strain = compute_cnn_strain(resolved_path, physical_params=physical_params)
-        ref = save_array_result(run_dir, resolved_path, result_key, strain, resolved_file_id)
-        return json.dumps({"status": "success", "method": "cnn", "ref": ref}, ensure_ascii=False)
-    except Exception as exc:
-        return f"CNN 计算过程中发生错误: {exc}"
+        return save_array_result(run_dir, resolved_path, result_key, strain, resolved_file_id)
+
+    return _run_strain_tool("cnn", "CNN ", file_id, file_ids, file_path, _compute)
 
 
 @tool
@@ -202,16 +218,14 @@ def bnn_method(
 ) -> str:
     """使用 BNN 方法对上传的 .mat 相位文件执行应变计算。"""
 
-    try:
-        selected_file_id = _select_file_id(file_id, file_ids)
-        resolved_file_id, resolved_path = resolve_file_reference(selected_file_id, file_path or None)
+    def _compute(resolved_path: str, resolved_file_id: str) -> dict[str, Any]:
         result_key = make_result_key("bnn", MC_test=MC_test)
         strain, epistemic_uncertainty = compute_bnn_strain(
             resolved_path,
             MC_test=MC_test,
             physical_params=physical_params,
         )
-        ref = save_bnn_result(
+        return save_bnn_result(
             run_dir,
             resolved_path,
             result_key,
@@ -219,9 +233,8 @@ def bnn_method(
             epistemic_uncertainty,
             resolved_file_id,
         )
-        return json.dumps({"status": "success", "method": "bnn", "ref": ref}, ensure_ascii=False)
-    except Exception as exc:
-        return f"BNN 计算过程中发生错误: {exc}"
+
+    return _run_strain_tool("bnn", "BNN ", file_id, file_ids, file_path, _compute)
 
 
 TOOLS = [vector_method_g, cnn_method, bnn_method]
