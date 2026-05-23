@@ -261,6 +261,68 @@ ROUTE_KEYWORDS: dict[str, list[str]] = {
 # 关键词匹配优先级。顺序敏感：靠前的子图先匹配。
 ROUTE_PRIORITY: tuple[str, ...] = ("self_rag", "strain_estimation", "deep_research")
 
+# 知识问答信号。命中说明用户想「了解」而非「计算」，
+# 用于在方法名（bnn/cnn/...）触发应变路由前拦截，改走知识库。
+KNOWLEDGE_QUESTION_KEYWORDS: tuple[str, ...] = (
+    "介绍",
+    "简介",
+    "是什么",
+    "什么是",
+    "什么叫",
+    "解释",
+    "讲讲",
+    "讲解",
+    "说说",
+    "原理",
+    "区别",
+    "差异",
+    "对比",
+    "比较",
+    "定义",
+    "概念",
+    "了解",
+    "explain",
+    "what is",
+    "what are",
+    "what's",
+    "introduce",
+    "definition",
+    "define",
+    "difference",
+)
+
+# 应变计算的动作意图词。只有出现明确的「做计算」信号（或已上传文件），
+# 才把含方法名的请求判定为应变计算，避免「介绍BNN」被误判。
+STRAIN_COMPUTE_KEYWORDS: tuple[str, ...] = (
+    "计算",
+    "估计",
+    "估算",
+    "运算",
+    "重建",
+    "重构",
+    "运行",
+    "跑",
+    "推理",
+    "预测",
+    "compute",
+    "calculate",
+    "run",
+    "estimate",
+    "estimation",
+    "predict",
+    "inference",
+    "process",
+    "reconstruct",
+)
+
+
+def _is_knowledge_question(lowered: str) -> bool:
+    return any(token in lowered for token in KNOWLEDGE_QUESTION_KEYWORDS)
+
+
+def _has_strain_compute_intent(lowered: str) -> bool:
+    return any(token in lowered for token in STRAIN_COMPUTE_KEYWORDS)
+
 
 def supervisor(state: OctGraphState) -> OctGraphState:
     """混合分层路由：显式请求 > 状态标志 > 强信号 > 关键词 > 兜底。
@@ -288,17 +350,36 @@ def supervisor(state: OctGraphState) -> OctGraphState:
     if _is_memory_command(text):
         return {"sub_agent": "chat"}
 
-    inferred = infer_route_from_text(text)
+    inferred = infer_route_from_text(text, has_files=bool(state.get("file_ids")))
     if inferred is not None:
         return {"sub_agent": inferred}
     return {"sub_agent": "self_rag"}
 
 
-def infer_route_from_text(text: str) -> Literal["strain_estimation", "deep_research", "self_rag"] | None:
+def infer_route_from_text(
+    text: str, has_files: bool = False
+) -> Literal["strain_estimation", "deep_research", "self_rag"] | None:
+    """关键词路由，并对应变子图做意图门控。
+
+    方法名（bnn/cnn/strain/...）既出现在计算请求里，也出现在知识问答里，
+    因此命中应变关键词后还需确认是「计算意图」而非「了解意图」：
+      - 明确的知识问句（介绍/是什么/解释...）且无计算动作词 -> 跳过应变，归知识库；
+      - 出现计算动作词，或本轮已上传文件 -> 应变计算；
+      - 仅裸方法名、既无计算意图也无附件 -> 跳过应变，交由兜底 self_rag。
+    """
     lowered = text.lower()
+    knowledge = _is_knowledge_question(lowered)
+    compute = _has_strain_compute_intent(lowered)
     for route in ROUTE_PRIORITY:
-        if any(token in lowered for token in ROUTE_KEYWORDS[route]):
-            return route  # type: ignore[return-value]
+        if not any(token in lowered for token in ROUTE_KEYWORDS[route]):
+            continue
+        if route == "strain_estimation":
+            if knowledge and not compute:
+                continue
+            if has_files or compute:
+                return "strain_estimation"
+            continue
+        return route  # type: ignore[return-value]
     return None
 
 

@@ -1,4 +1,4 @@
-import { Download, Maximize2, Minimize2 } from "lucide-react";
+import { Download, Maximize2, Minimize2, PanelRightClose } from "lucide-react";
 import { useEffect, useState } from "react";
 import { downloadUrl, fetchResultMetadata, recoverResultMetadata } from "../lib/api";
 import type { ResultRef } from "../types/api";
@@ -6,22 +6,23 @@ import { HeatmapViewer } from "./HeatmapViewer";
 
 type Props = {
   results: ResultRef[];
+  onHide: () => void;
 };
 
-export function ResultGallery({ results }: Props) {
+export function ResultGallery({ results, onHide }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   if (results.length === 0) {
     return (
       <aside className={`artifact-panel empty ${expanded ? "expanded" : ""}`}>
-        <PanelTitle expanded={expanded} onToggle={() => setExpanded((value) => !value)} />
+        <PanelTitle expanded={expanded} onToggle={() => setExpanded((value) => !value)} onHide={onHide} />
         <p>计算结果、热力图、文献卡片和报告草稿会出现在这里。</p>
       </aside>
     );
   }
   return (
     <aside className={`artifact-panel ${expanded ? "expanded" : ""}`}>
-      <PanelTitle expanded={expanded} onToggle={() => setExpanded((value) => !value)} />
+      <PanelTitle expanded={expanded} onToggle={() => setExpanded((value) => !value)} onHide={onHide} />
       <div className="artifact-list">
         {results.map((result) => (
           <ResultCard expanded={expanded} key={result.result_id} result={result} />
@@ -31,13 +32,33 @@ export function ResultGallery({ results }: Props) {
   );
 }
 
-function PanelTitle({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
+function PanelTitle({
+  expanded,
+  onToggle,
+  onHide,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  onHide: () => void;
+}) {
   return (
     <header className="artifact-panel-header">
-      <h2>结果</h2>
-      <button className="icon-button" onClick={onToggle} title={expanded ? "收起结果面板" : "展开结果面板"} type="button">
-        {expanded ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
-      </button>
+      <h2>结果看板</h2>
+      <div className="artifact-panel-actions">
+        <button
+          className="btn-icon"
+          onClick={onToggle}
+          title={expanded ? "收起结果面板" : "全屏查看"}
+          type="button"
+        >
+          {expanded ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
+        </button>
+        {!expanded && (
+          <button className="btn-icon" onClick={onHide} title="隐藏结果看板" type="button">
+            <PanelRightClose size={17} />
+          </button>
+        )}
+      </div>
     </header>
   );
 }

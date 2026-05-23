@@ -1,12 +1,26 @@
 import { useStream } from "@langchain/langgraph-sdk/react";
 import type { Message } from "@langchain/langgraph-sdk";
-import { Bot, Play, PlusCircle, Search, Square } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import {
+  Bot,
+  ChevronDown,
+  Database,
+  FlaskConical,
+  PanelLeft,
+  Paperclip,
+  Play,
+  Search,
+  SlidersHorizontal,
+  Square,
+  X,
+} from "lucide-react";
+import type { ComponentType } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ConversationSidebar } from "./components/ConversationSidebar";
 import { FileUploader } from "./components/FileUploader";
+import { MessageContent, hasVisibleAiContent } from "./components/MessageContent";
 import { MethodPanel } from "./components/MethodPanel";
 import { ResultGallery } from "./components/ResultGallery";
+import { WelcomeScreen } from "./components/WelcomeScreen";
 import { apiUrl, uploadMatFile } from "./lib/api";
 import type { DisplayMessage, MethodSettings, ResultRef, UploadedFile } from "./types/api";
 
@@ -44,48 +58,48 @@ function messageText(message: Message): string {
   return JSON.stringify(message.content, null, 2);
 }
 
-function splitThinking(content: string): { thinking: string | null; answer: string } {
-  const match = content.match(/<think>([\s\S]*?)<\/think>/i);
-  if (!match) {
-    const cleaned = content.replace(/<think>[\s\S]*$/i, "").trim();
-    return { thinking: null, answer: cleaned };
-  }
-  return {
-    thinking: match[1].trim(),
-    answer: content.replace(match[0], "").trim(),
-  };
-}
-
-function hasVisibleAiContent(content: string, showThinking: boolean): boolean {
-  const { thinking, answer } = splitThinking(content);
-  return answer.trim().length > 0 || Boolean(showThinking && thinking);
-}
-
-function normalizeMarkdown(content: string): string {
-  return content.replace(/\n{3,}/g, "\n\n").trim();
-}
-
 function mayGenerateResult(text: string, files: UploadedFile[], settings: MethodSettings): boolean {
   if (files.length > 0) return true;
   if (settings.vector || settings.cnn || settings.bnn) return true;
   return /应变|strain|cnn|bnn|矢量|vector|phase|热力图|\.mat/i.test(text);
 }
 
-function ChatView({ onNewConversation }: { onNewConversation: () => void }) {
+// 与后端 requested_sub_agent 字面量对应，用于显式路由到对应子图。
+type RequestedAgent = "strain_estimation" | "deep_research" | "self_rag";
+
+const SUBAGENTS: { id: RequestedAgent; label: string; icon: ComponentType<{ size?: number }> }[] = [
+  { id: "strain_estimation", label: "应变计算", icon: FlaskConical },
+  { id: "deep_research", label: "Deep Research", icon: Search },
+  { id: "self_rag", label: "知识库", icon: Database },
+];
+
+type ChatViewProps = {
+  threadId: string | null;
+  onThreadCreated: (id: string) => void;
+  onExpandSidebar: () => void;
+  sidebarCollapsed: boolean;
+  panelHidden: boolean;
+  onTogglePanel: () => void;
+};
+
+function ChatView({
+  threadId,
+  onThreadCreated,
+  onExpandSidebar,
+  sidebarCollapsed,
+  panelHidden,
+  onTogglePanel,
+}: ChatViewProps) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [settings, setSettings] = useState<MethodSettings>(initialSettings);
   const [input, setInput] = useState("");
   const [results, setResults] = useState<ResultRef[]>([]);
-  const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [deepResearchOnce, setDeepResearchOnce] = useState(false);
-  const messageListRef = useRef<HTMLElement | null>(null);
+  const [requestedAgent, setRequestedAgent] = useState<RequestedAgent | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const replaceNextResultsRef = useRef(false);
-  const savedThreadId = useRef<string | null>(
-    localStorage.getItem("oct_thread_id"),
-  );
 
   const fileIds = useMemo(() => files.map((file) => file.file_id), [files]);
 
@@ -97,16 +111,15 @@ function ChatView({ onNewConversation }: { onNewConversation: () => void }) {
     physical_params: unknown;
     visualization_enabled: boolean;
     show_thinking: boolean;
-    requested_sub_agent?: "deep_research" | null;
+    requested_sub_agent?: RequestedAgent | null;
     conversation_summary?: string;
   }>({
     apiUrl,
     assistantId: "agent",
     messagesKey: "messages",
-    threadId: savedThreadId.current ?? undefined,
+    threadId: threadId ?? undefined,
     onThreadId: (id: string) => {
-      localStorage.setItem("oct_thread_id", id);
-      savedThreadId.current = id;
+      onThreadCreated(id);
     },
     onUpdateEvent: (event: unknown) => {
       const typed = event as {
@@ -129,6 +142,7 @@ function ChatView({ onNewConversation }: { onNewConversation: () => void }) {
     },
   });
 
+  // 计算结果可能从 thread 状态回填（如刷新或切换会话后）。
   useEffect(() => {
     const refs = thread.values?.result_refs ?? [];
     if (refs.length) {
@@ -142,25 +156,16 @@ function ChatView({ onNewConversation }: { onNewConversation: () => void }) {
     }
   }, [thread.values?.result_refs]);
 
-  useEffect(() => {
-    const aiMessages = (thread.messages ?? []).filter((message) => message.type === "ai");
-    if (!aiMessages.length) return;
-    setDisplayMessages((current) => {
-      let next = current;
-      for (const message of aiMessages) {
-        const content = messageText(message);
-        if (!content.trim()) continue;
-        const key = message.id ?? content;
-        const existingIndex = next.findIndex((item) => item.id === key);
-        if (existingIndex >= 0) {
-          if (next[existingIndex].content === content) continue;
-          next = next.map((item, index) => (index === existingIndex ? { ...item, content } : item));
-        } else {
-          next = [...next, { id: key, role: "ai", content }];
-        }
-      }
-      return next;
-    });
+  // 对话消息直接从 thread.messages 派生，保证切换历史会话时能完整还原。
+  const displayMessages = useMemo<DisplayMessage[]>(() => {
+    const out: DisplayMessage[] = [];
+    for (const message of thread.messages ?? []) {
+      if (message.type !== "human" && message.type !== "ai") continue;
+      const content = messageText(message);
+      if (!content.trim()) continue;
+      out.push({ id: message.id ?? `msg-${out.length}`, role: message.type, content });
+    }
+    return out;
   }, [thread.messages]);
 
   const handleUploaded = useCallback((file: UploadedFile) => {
@@ -192,9 +197,16 @@ function ChatView({ onNewConversation }: { onNewConversation: () => void }) {
     const prompt = rawText || (files.length ? "请处理本轮附件。" : "");
     if (!prompt) return;
     setError(null);
-    const requestedSubAgent = deepResearchOnce ? "deep_research" : null;
-    const shouldReplaceResults =
-      requestedSubAgent === "deep_research" ? false : mayGenerateResult(prompt, files, settings);
+    const requestedSubAgent = requestedAgent;
+    let shouldReplaceResults: boolean;
+    if (requestedSubAgent === "strain_estimation") {
+      shouldReplaceResults = true;
+    } else if (requestedSubAgent) {
+      // deep_research / self_rag 不产生热力图结果，保留既有结果。
+      shouldReplaceResults = false;
+    } else {
+      shouldReplaceResults = mayGenerateResult(prompt, files, settings);
+    }
     if (shouldReplaceResults) {
       replaceNextResultsRef.current = true;
       setResults([]);
@@ -210,15 +222,6 @@ function ChatView({ onNewConversation }: { onNewConversation: () => void }) {
         id: crypto.randomUUID(),
       },
     ];
-
-    setDisplayMessages((current) => [
-      ...current,
-      {
-        id: crypto.randomUUID(),
-        role: "human",
-        content: rawText || "已发送附件",
-      },
-    ]);
 
     thread.submit({
       messages: newMessages,
@@ -245,8 +248,8 @@ function ChatView({ onNewConversation }: { onNewConversation: () => void }) {
 
     setInput("");
     setFiles([]);
-    setDeepResearchOnce(false);
-  }, [deepResearchOnce, fileIds, files, input, results, settings, thread]);
+    setRequestedAgent(null);
+  }, [requestedAgent, fileIds, files, input, results, settings, thread]);
 
   const canSend = input.trim().length > 0 || files.length > 0;
   const lastMessage = displayMessages[displayMessages.length - 1];
@@ -260,47 +263,51 @@ function ChatView({ onNewConversation }: { onNewConversation: () => void }) {
     messageEndRef.current?.scrollIntoView({ block: "end" });
   }, [displayMessages, showThinkingPlaceholder, thread.isLoading]);
 
+  const isEmptyConversation = displayMessages.length === 0 && !showThinkingPlaceholder;
+
   return (
-    <div className="app-shell">
+    <>
       <main className="chat-shell">
         <header className="chat-header">
+          {sidebarCollapsed && (
+            <button type="button" className="btn-icon" onClick={onExpandSidebar} title="展开侧栏">
+              <PanelLeft size={18} />
+            </button>
+          )}
           <div className="agent-mark">
-            <Bot size={22} />
+            <Bot size={20} />
           </div>
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <h1>OCT Agent</h1>
-            <p>通用对话、文件分析、应变计算与后续文献总结都会在这里完成。</p>
+            <p>通用对话、文件分析、应变计算与文献研究都在这里完成。</p>
           </div>
-          <button
-            type="button"
-            className="new-conversation-button"
-            onClick={onNewConversation}
-            title="开始新对话"
-            disabled={thread.isLoading}
-          >
-            <PlusCircle size={18} />
-            <span>新对话</span>
-          </button>
         </header>
 
-        <section className="message-list" ref={messageListRef}>
-          {displayMessages.length === 0 && !showThinkingPlaceholder ? (
-            <div className="welcome">
-              <h2>有什么 OCT 相关问题，直接问我。</h2>
-              <p>可以先普通聊天，也可以添加 `.mat` 文件后让 Agent 做应变计算。</p>
-            </div>
+        <section className="message-list">
+          {isEmptyConversation ? (
+            <WelcomeScreen onPick={setInput} />
           ) : (
             <>
               {displayMessages.map((message) => (
                 <article className={`message ${message.role}`} key={message.id}>
-                  <span>{message.role === "human" ? "你" : "OCT Agent"}</span>
                   <MessageContent content={message.content} role={message.role} showThinking={settings.showThinking} />
                 </article>
               ))}
               {showThinkingPlaceholder && (
                 <article className="message ai thinking-message">
-                  <span>OCT Agent</span>
-                  <div>思考中...</div>
+                  <div className="message-meta">
+                    <span className="message-avatar">
+                      <Bot size={15} />
+                    </span>
+                    <span>OCT Agent</span>
+                  </div>
+                  <div className="message-bubble">
+                    <span className="typing-dots">
+                      <span />
+                      <span />
+                      <span />
+                    </span>
+                  </div>
                 </article>
               )}
               <div className="message-end" ref={messageEndRef} />
@@ -321,14 +328,65 @@ function ChatView({ onNewConversation }: { onNewConversation: () => void }) {
             void uploadDroppedFiles(event.dataTransfer.files);
           }}
         >
-          <FileUploader files={files} onUploaded={handleUploaded} onRemove={removeFile} />
-          <MethodPanel settings={settings} onChange={setSettings} />
+          <div className="composer-controls">
+            <FileUploader onUploaded={handleUploaded} onError={setError} />
+            <button
+              type="button"
+              className={`control-chip ${advancedOpen ? "active" : ""}`}
+              onClick={() => setAdvancedOpen((current) => !current)}
+              aria-expanded={advancedOpen}
+              title="应变计算高级设置"
+            >
+              <SlidersHorizontal size={16} />
+              <span>高级设置</span>
+              <ChevronDown size={14} className={`chevron ${advancedOpen ? "open" : ""}`} />
+            </button>
+            <div className="control-spacer" />
+            <div className="subagent-toggles">
+              {SUBAGENTS.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`subagent-btn ${requestedAgent === id ? "active" : ""}`}
+                  onClick={() => setRequestedAgent((current) => (current === id ? null : id))}
+                  disabled={thread.isLoading}
+                  aria-pressed={requestedAgent === id}
+                  title={`下一条消息显式路由到「${label}」子图`}
+                >
+                  <Icon size={16} />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {files.length > 0 && (
+            <div className="attachment-chips">
+              {files.map((file) => (
+                <span className="attachment-chip" key={file.file_id} title={file.original_name}>
+                  <Paperclip size={14} />
+                  <span>{file.original_name}</span>
+                  <button type="button" title="移除附件" onClick={() => removeFile(file.file_id)}>
+                    <X size={13} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {advancedOpen && (
+            <div className="advanced-panel">
+              <MethodPanel settings={settings} onChange={setSettings} />
+            </div>
+          )}
+
           {error && <p className="error-text">{error}</p>}
+
           <div className="input-row">
             <textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              placeholder="输入消息，例如：你好；帮我总结 OCT 是什么；对上传的 phase 文件做 CNN 和矢量法应变计算。"
+              placeholder="输入消息，或拖入 .mat 文件让 Agent 做应变计算。Enter 发送，Shift+Enter 换行。"
               onKeyDown={(event) => {
                 if (
                   event.key === "Enter" &&
@@ -341,18 +399,7 @@ function ChatView({ onNewConversation }: { onNewConversation: () => void }) {
               }}
             />
             <button
-              className={`research-button ${deepResearchOnce ? "active" : ""}`}
-              type="button"
-              onClick={() => setDeepResearchOnce((current) => !current)}
-              disabled={thread.isLoading}
-              title="下一条消息使用 Deep Research"
-              aria-pressed={deepResearchOnce}
-            >
-              <Search size={18} />
-              <span>Deep Research</span>
-            </button>
-            <button
-              className="run-button"
+              className="btn btn-primary run-button"
               type="button"
               onClick={thread.isLoading ? thread.stop : submit}
               disabled={!canSend && !thread.isLoading}
@@ -365,45 +412,78 @@ function ChatView({ onNewConversation }: { onNewConversation: () => void }) {
         </section>
       </main>
 
-      <ResultGallery results={results} />
-    </div>
+      {!panelHidden && <ResultGallery results={results} onHide={onTogglePanel} />}
+      {panelHidden && (
+        <button type="button" className="panel-reopen" onClick={onTogglePanel} title="展开结果看板">
+          <Search size={15} />
+          <span>结果看板</span>
+        </button>
+      )}
+    </>
   );
 }
 
 export default function App() {
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(
+    localStorage.getItem("oct_thread_id"),
+  );
   const [sessionKey, setSessionKey] = useState(0);
+  const [sidebarRefresh, setSidebarRefresh] = useState(0);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [panelHidden, setPanelHidden] = useState(false);
 
   const handleNewConversation = useCallback(() => {
     localStorage.removeItem("oct_thread_id");
+    setActiveThreadId(null);
     setSessionKey((k) => k + 1);
+    setSidebarRefresh((k) => k + 1);
   }, []);
 
-  return <ChatView key={sessionKey} onNewConversation={handleNewConversation} />;
-}
+  const handleSelectThread = useCallback(
+    (id: string) => {
+      if (id === activeThreadId) return;
+      localStorage.setItem("oct_thread_id", id);
+      setActiveThreadId(id);
+      setSessionKey((k) => k + 1);
+    },
+    [activeThreadId],
+  );
 
-function MessageContent({
-  content,
-  role,
-  showThinking,
-}: {
-  content: string;
-  role: "human" | "ai";
-  showThinking: boolean;
-}) {
-  if (role === "human") {
-    return <div>{content}</div>;
-  }
-  const { thinking, answer } = splitThinking(content);
-  const rendered = normalizeMarkdown(answer || "思考中...");
+  const handleThreadCreated = useCallback((id: string) => {
+    localStorage.setItem("oct_thread_id", id);
+    setActiveThreadId(id);
+    setSidebarRefresh((k) => k + 1);
+  }, []);
+
+  const shellClass = [
+    "app-shell",
+    sidebarCollapsed ? "sidebar-collapsed" : "",
+    panelHidden ? "panel-hidden" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div className="markdown-body">
-      {thinking && showThinking && (
-        <details className="thinking-block" open>
-          <summary>深度思考</summary>
-          <pre>{thinking}</pre>
-        </details>
+    <div className={shellClass}>
+      {!sidebarCollapsed && (
+        <ConversationSidebar
+          activeThreadId={activeThreadId}
+          refreshKey={sidebarRefresh}
+          onSelect={handleSelectThread}
+          onNew={handleNewConversation}
+          onCollapse={() => setSidebarCollapsed(true)}
+          onDeletedActive={handleNewConversation}
+        />
       )}
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{rendered}</ReactMarkdown>
+      <ChatView
+        key={sessionKey}
+        threadId={activeThreadId}
+        onThreadCreated={handleThreadCreated}
+        onExpandSidebar={() => setSidebarCollapsed(false)}
+        sidebarCollapsed={sidebarCollapsed}
+        panelHidden={panelHidden}
+        onTogglePanel={() => setPanelHidden((value) => !value)}
+      />
     </div>
   );
 }

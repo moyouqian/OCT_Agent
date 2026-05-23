@@ -1,4 +1,3 @@
-import { SlidersHorizontal } from "lucide-react";
 import type { MethodSettings } from "../types/api";
 
 type Props = {
@@ -16,12 +15,7 @@ export function MethodPanel({ settings, onChange }: Props) {
   }
 
   return (
-    <details className="advanced-settings">
-      <summary>
-        <SlidersHorizontal size={16} />
-        <span>高级设置</span>
-      </summary>
-      <div className="advanced-body">
+    <div className="advanced-body">
         <fieldset>
           <legend>显示设置</legend>
           <label className="check-row">
@@ -141,7 +135,6 @@ export function MethodPanel({ settings, onChange }: Props) {
             />
           </label>
         </fieldset>
-      </div>
-    </details>
+    </div>
   );
 }

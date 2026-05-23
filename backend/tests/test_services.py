@@ -199,6 +199,27 @@ def test_route_keywords_cover_new_self_rag_and_chinese_research():
     assert infer_route_from_text("请基于本地知识库回答 phase unwrapping") == "self_rag"
 
 
+def test_method_name_knowledge_question_skips_strain():
+    # 方法名出现在知识问答里时，关键词层不应判定为应变计算（交由兜底 self_rag）。
+    assert infer_route_from_text("介绍BNN") is None
+    assert infer_route_from_text("BNN是什么") is None
+    assert infer_route_from_text("CNN 和 BNN 有什么区别") is None
+    # 出现明确计算动作词时仍走应变。
+    assert infer_route_from_text("用 BNN 计算应变") == "strain_estimation"
+    # 本轮已上传文件时，方法名/领域词触发应变计算。
+    assert infer_route_from_text("矢量法应变", has_files=True) == "strain_estimation"
+    # 明确知识问句即便带附件也不进应变。
+    assert infer_route_from_text("介绍BNN", has_files=True) is None
+
+
+def test_supervisor_routes_method_knowledge_question_to_self_rag():
+    knowledge = supervisor({"messages": [HumanMessage(content="介绍BNN")]})
+    assert knowledge["sub_agent"] == "self_rag"
+
+    compute = supervisor({"messages": [HumanMessage(content="用 BNN 计算应变")]})
+    assert compute["sub_agent"] == "strain_estimation"
+
+
 def test_default_supervisor_routes_to_self_rag_without_llm():
     result = supervisor({"messages": [HumanMessage(content="你好，介绍一下 OCT")]})
 
