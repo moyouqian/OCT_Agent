@@ -17,6 +17,8 @@ from agent.utils.structured import invoke_structured_json_schema
 from self_rag_engine.config import DEFAULT_SELF_RAG_DATA_DIR, SelfRagConfig
 from self_rag_engine.graph import build_self_rag_graph, initial_state
 from self_rag_engine.ingestion import ingest_file
+from self_rag_engine.llm import build_chat_backend
+from self_rag_engine.retrieval import HybridRetriever
 
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parents[3] / ".env")
@@ -62,6 +64,24 @@ def knowledge_base_is_empty() -> bool:
     except Exception:
         return False
     return int(status.get("child_chunks", 0) or 0) <= 0
+
+
+# 供 deep_research 等子图使用的 HybridRetriever 单例。
+# 与 Self-RAG 图共享同一套 ChromaDB + BM25 索引，但独立于图的生成流程。
+_RAG_RETRIEVER = None
+_RAG_RETRIEVER_LOCK = threading.Lock()
+
+
+def get_rag_retriever() -> HybridRetriever:
+    """返回缓存的 HybridRetriever，用于纯检索场景（不做生成/评分/重写）。"""
+    global _RAG_RETRIEVER
+    if _RAG_RETRIEVER is None:
+        with _RAG_RETRIEVER_LOCK:
+            if _RAG_RETRIEVER is None:
+                config = get_self_rag_config()
+                config.use_hyde = False
+                _RAG_RETRIEVER = HybridRetriever(config=config, llm=build_chat_backend(config))
+    return _RAG_RETRIEVER
 
 
 def decide_retrieval(messages: list[BaseMessage]) -> tuple[bool, dict[str, Any]]:

@@ -84,6 +84,38 @@ class TavilyResearchSource(ResearchSource):
         return results
 
 
+class RagResearchSource(ResearchSource):
+    """Local knowledge base (ChromaDB + BM25) research source."""
+
+    name = "knowledge_base"
+
+    def search(self, query: str, max_results: int = 3) -> list[SourceResult]:
+        try:
+            from agent.self_rag import get_rag_retriever, knowledge_base_is_empty
+        except ImportError:
+            return []
+
+        if knowledge_base_is_empty():
+            return []
+
+        try:
+            retriever = get_rag_retriever()
+            result = retriever.retrieve(query)
+        except Exception:
+            return []
+
+        documents = result.get("documents", [])[:max_results]
+        return [
+            SourceResult(
+                source=self.name,
+                title=doc.get("meta", {}).get("title") or "知识库文档",
+                url=doc.get("meta", {}).get("source_path") or "",
+                content=(doc.get("text") or "")[:6000],
+            )
+            for doc in documents
+        ]
+
+
 class ZoteroMcpResearchSource(ResearchSource):
     """Placeholder for a future Zotero MCP source."""
 
@@ -96,7 +128,7 @@ class ZoteroMcpResearchSource(ResearchSource):
 def default_sources() -> list[ResearchSource]:
     """Return enabled research sources."""
 
-    return [TavilyResearchSource(), ZoteroMcpResearchSource()]
+    return [TavilyResearchSource(), RagResearchSource(), ZoteroMcpResearchSource()]
 
 
 def search_all_sources(
