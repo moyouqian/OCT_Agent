@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, get_buffer_string
+from pydantic import BaseModel, Field
 
+from agent.config import get_llm
+from agent.prompts import build_retrieval_gate_prompt
+from agent.utils.structured import invoke_structured_json_schema
 from self_rag_engine.config import DEFAULT_SELF_RAG_DATA_DIR, SelfRagConfig
-from self_rag_engine.graph import initial_state, run_self_rag
+from self_rag_engine.graph import build_self_rag_graph, initial_state
 from self_rag_engine.ingestion import ingest_file
 
 
@@ -19,6 +24,70 @@ load_dotenv(dotenv_path=Path(__file__).resolve().parents[3] / ".env")
 SUPPORTED_KNOWLEDGE_EXTENSIONS = {".pdf", ".docx", ".md", ".txt"}
 SELF_RAG_DATA_DIR = DEFAULT_SELF_RAG_DATA_DIR
 SELF_RAG_UPLOAD_DIR = SELF_RAG_DATA_DIR / "uploads"
+
+# 本地知识库的领域描述，供检索闸门判断 query 是否落在库内。
+KNOWLEDGE_DOMAIN = (
+    "OCT（光学相干断层成像）应变估计相关：相位解包裹、矢量法 / CNN / BNN 应变计算、"
+    "OCT 成像原理、弹性成像，以及已索引的相关论文与笔记。"
+)
+# 送入闸门分类器的最近对话轮数（覆盖依赖上文的追问）。
+GATE_CONTEXT_TURNS = 6
+
+# 编译好的 Self-RAG 图单例，首次请求时按当前 config 构建，后续复用。
+# HybridRetriever 初始化需要加载 ChromaDB + BM25 索引，重建代价较高。
+_SELF_RAG_GRAPH = None
+_SELF_RAG_GRAPH_LOCK = threading.Lock()
+
+
+def _get_self_rag_graph():
+    global _SELF_RAG_GRAPH
+    if _SELF_RAG_GRAPH is None:
+        with _SELF_RAG_GRAPH_LOCK:
+            if _SELF_RAG_GRAPH is None:
+                _SELF_RAG_GRAPH = build_self_rag_graph(config=get_self_rag_config())
+    return _SELF_RAG_GRAPH
+
+
+class RetrievalDecision(BaseModel):
+    """检索闸门的判定结果。"""
+
+    needs_retrieval: bool = Field(description="是否需要查询本地知识库来回答用户最新问题。")
+    reason: str = Field(description="简短的中文判断理由。")
+
+
+def knowledge_base_is_empty() -> bool:
+    """知识库是否没有可检索的内容（无 child chunk）。"""
+    try:
+        status = knowledge_status()
+    except Exception:
+        return False
+    return int(status.get("child_chunks", 0) or 0) <= 0
+
+
+def decide_retrieval(messages: list[BaseMessage]) -> tuple[bool, dict[str, Any]]:
+    """检索闸门：判断本轮是否需要进入实际的 RAG 检索流程。
+
+    分两档：① 知识库为空直接短路（零 LLM）；② 否则用一次廉价的 LLM 分类，
+    结合最近对话与领域描述判断。任何异常都保守地返回"需要检索"。
+    返回 (should_retrieve, gate_trace)，gate_trace 用于可观测性。
+    """
+    if knowledge_base_is_empty():
+        return False, {"decision": "direct", "tier": "empty_kb", "reason": "本地知识库为空，直接进行对话。"}
+
+    recent_context = get_buffer_string(messages[-GATE_CONTEXT_TURNS:]) if messages else ""
+    prompt = build_retrieval_gate_prompt(knowledge_domain=KNOWLEDGE_DOMAIN, recent_context=recent_context)
+    try:
+        decision = invoke_structured_json_schema(
+            get_llm(),
+            RetrievalDecision,
+            [HumanMessage(content=prompt)],
+            fallback_fn=lambda _: RetrievalDecision(needs_retrieval=True, reason="闸门判定失败，保守进行检索。"),
+        )
+    except Exception as exc:
+        return True, {"decision": "retrieve", "tier": "error", "reason": f"闸门异常，保守检索：{exc}"}
+
+    label = "retrieve" if decision.needs_retrieval else "direct"
+    return decision.needs_retrieval, {"decision": label, "tier": "llm", "reason": decision.reason}
 
 
 def get_self_rag_config() -> SelfRagConfig:
@@ -38,8 +107,8 @@ def get_self_rag_config() -> SelfRagConfig:
 
 
 def run_knowledge_query(question: str) -> dict[str, Any]:
-    config = get_self_rag_config()
-    result = run_self_rag(question, config=config)
+    graph = _get_self_rag_graph()
+    result = graph.invoke(initial_state(question))
     result["_used_chat_fallback"] = should_fallback_to_chat(result)
     return result
 

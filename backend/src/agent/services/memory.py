@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime
 from typing import Any
 
 from agent.services.paths import DATA_ROOT, ensure_data_dirs
 
 MEMORY_PATH = DATA_ROOT / "memory.json"
+_MEMORY_LOCK = threading.Lock()
 MEMORY_CATEGORIES = {
     "preference": "用户偏好",
     "project": "项目事实",
@@ -39,26 +41,28 @@ def save_memory(memory: dict[str, list[dict[str, Any]]]) -> None:
 
 
 def remember(content: str, category: str = "preference") -> dict[str, Any]:
-    memory = load_memory()
     category = category if category in MEMORY_CATEGORIES else "preference"
     item = {
         "content": content.strip(),
         "created_at": datetime.now().isoformat(timespec="seconds"),
     }
     if item["content"]:
-        memory[category].append(item)
-        save_memory(memory)
+        with _MEMORY_LOCK:
+            memory = load_memory()
+            memory[category].append(item)
+            save_memory(memory)
     return item
 
 
 def forget(content: str) -> int:
-    memory = load_memory()
-    removed = 0
-    for key, items in memory.items():
-        kept = [item for item in items if content not in item.get("content", "")]
-        removed += len(items) - len(kept)
-        memory[key] = kept
-    save_memory(memory)
+    with _MEMORY_LOCK:
+        memory = load_memory()
+        removed = 0
+        for key, items in memory.items():
+            kept = [item for item in items if content not in item.get("content", "")]
+            removed += len(items) - len(kept)
+            memory[key] = kept
+        save_memory(memory)
     return removed
 
 

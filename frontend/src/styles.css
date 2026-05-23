@@ -631,3 +631,24 @@ input[type="text"] {
     grid-template-columns: 1fr;
   }
 }
+
+.new-conversation-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.new-conversation-button:hover {
+  background: #f1f5f9;
+}
+.new-conversation-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

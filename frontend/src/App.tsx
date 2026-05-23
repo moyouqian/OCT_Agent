@@ -1,6 +1,6 @@
 import { useStream } from "@langchain/langgraph-sdk/react";
 import type { Message } from "@langchain/langgraph-sdk";
-import { Bot, Play, Search, Square } from "lucide-react";
+import { Bot, Play, PlusCircle, Search, Square } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -71,7 +71,7 @@ function mayGenerateResult(text: string, files: UploadedFile[], settings: Method
   return /应变|strain|cnn|bnn|矢量|vector|phase|热力图|\.mat/i.test(text);
 }
 
-export default function App() {
+function ChatView({ onNewConversation }: { onNewConversation: () => void }) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [settings, setSettings] = useState<MethodSettings>(initialSettings);
   const [input, setInput] = useState("");
@@ -83,6 +83,9 @@ export default function App() {
   const messageListRef = useRef<HTMLElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const replaceNextResultsRef = useRef(false);
+  const savedThreadId = useRef<string | null>(
+    localStorage.getItem("oct_thread_id"),
+  );
 
   const fileIds = useMemo(() => files.map((file) => file.file_id), [files]);
 
@@ -95,10 +98,16 @@ export default function App() {
     visualization_enabled: boolean;
     show_thinking: boolean;
     requested_sub_agent?: "deep_research" | null;
+    conversation_summary?: string;
   }>({
     apiUrl,
     assistantId: "agent",
     messagesKey: "messages",
+    threadId: savedThreadId.current ?? undefined,
+    onThreadId: (id: string) => {
+      localStorage.setItem("oct_thread_id", id);
+      savedThreadId.current = id;
+    },
     onUpdateEvent: (event: unknown) => {
       const typed = event as {
         collect_result_refs?: { result_refs?: ResultRef[] };
@@ -258,10 +267,20 @@ export default function App() {
           <div className="agent-mark">
             <Bot size={22} />
           </div>
-          <div>
+          <div style={{ flex: 1 }}>
             <h1>OCT Agent</h1>
             <p>通用对话、文件分析、应变计算与后续文献总结都会在这里完成。</p>
           </div>
+          <button
+            type="button"
+            className="new-conversation-button"
+            onClick={onNewConversation}
+            title="开始新对话"
+            disabled={thread.isLoading}
+          >
+            <PlusCircle size={18} />
+            <span>新对话</span>
+          </button>
         </header>
 
         <section className="message-list" ref={messageListRef}>
@@ -349,6 +368,17 @@ export default function App() {
       <ResultGallery results={results} />
     </div>
   );
+}
+
+export default function App() {
+  const [sessionKey, setSessionKey] = useState(0);
+
+  const handleNewConversation = useCallback(() => {
+    localStorage.removeItem("oct_thread_id");
+    setSessionKey((k) => k + 1);
+  }, []);
+
+  return <ChatView key={sessionKey} onNewConversation={handleNewConversation} />;
 }
 
 function MessageContent({

@@ -2,23 +2,29 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any, Literal
 
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, get_buffer_string
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
 from agent.config import get_llm
-from agent.prompts import build_chat_prompt, build_strain_prompt
+from agent.prompts import build_chat_prompt, build_strain_prompt, build_summarize_prompt
 from agent.research import deep_research
 from agent.schemas import OctGraphState
 from agent.services.memory import forget, memory_summary, remember
 from agent.services.models import DEFAULT_BANDWIDTH, DEFAULT_REFRACTIVE_INDEX, DEFAULT_WAVELENGTH
 from agent.services.storage import make_run_dir
-from agent.self_rag import run_knowledge_query, self_rag_message
+from agent.self_rag import decide_retrieval, run_knowledge_query, self_rag_message
 from agent.tools import TOOLS
+from agent.utils.messages import latest_user_text
+
+
+_SUMMARIZE_THRESHOLD = 20   # 超过此消息数触发摘要
+_KEEP_RECENT = 6            # LLM 调用时保留最近 N 条消息
 
 
 def _default_strain_settings() -> dict[str, Any]:
@@ -42,10 +48,32 @@ def _default_physical_params() -> dict[str, float]:
 
 
 def _latest_user_text(state: OctGraphState) -> str:
-    for msg in reversed(state["messages"]):
-        if getattr(msg, "type", "") == "human":
-            return str(msg.content)
-    return ""
+    return latest_user_text(state.get("messages", []))
+
+
+def summarize_conversation(state: OctGraphState) -> OctGraphState:
+    messages = state.get("messages", [])
+    if len(messages) <= _SUMMARIZE_THRESHOLD:
+        return {}
+
+    last_count = state.get("summary_message_count", 0)
+    new_compressible = len(messages) - _KEEP_RECENT
+    if new_compressible <= last_count:
+        return {}
+
+    to_summarize = messages[last_count:new_compressible]
+    existing_summary = state.get("conversation_summary", "")
+    prompt = build_summarize_prompt(get_buffer_string(to_summarize), existing_summary)
+    try:
+        response = get_llm().invoke([HumanMessage(content=prompt)])
+        new_summary = str(response.content).strip()
+    except Exception:
+        return {}
+
+    return {
+        "conversation_summary": new_summary,
+        "summary_message_count": new_compressible,
+    }
 
 
 def init_run_context(state: OctGraphState) -> OctGraphState:
@@ -91,7 +119,9 @@ def strain_assistant(state: OctGraphState) -> OctGraphState:
             summary=summary,
         )
     )
-    response = get_llm().bind_tools(TOOLS).invoke([sys_msg] + state["messages"])
+    messages = state.get("messages", [])
+    recent = messages[-_KEEP_RECENT:] if len(messages) > _KEEP_RECENT else messages
+    response = get_llm().bind_tools(TOOLS).invoke([sys_msg] + recent)
     return {"messages": [response]}
 
 
@@ -101,8 +131,6 @@ def collect_result_refs(state: OctGraphState) -> OctGraphState:
         if getattr(msg, "type", "") != "tool":
             continue
         try:
-            import json
-
             data = json.loads(msg.content)
         except Exception:
             continue
@@ -147,7 +175,15 @@ def route_after_assistant(state: OctGraphState) -> Literal["tools", "judge_visua
 
 
 def route_after_judge(state: OctGraphState) -> str:
-    return "visualize" if state.get("visualization_enabled", True) else END
+    if not state.get("visualization_enabled", True):
+        return END
+    for msg in reversed(state.get("messages", [])):
+        msg_type = getattr(msg, "type", "")
+        if msg_type == "human":
+            return END
+        if msg_type == "tool":
+            return "visualize"
+    return END
 
 
 strain_builder = StateGraph(OctGraphState)
@@ -326,22 +362,45 @@ def _memory_command(text: str) -> str | None:
 
 def chat(state: OctGraphState) -> OctGraphState:
     text = _latest_user_text(state)
+
+    if "清除摘要" in text.strip():
+        return {
+            "messages": [AIMessage(content="已清除对话摘要，后续对话将重新积累上下文。")],
+            "conversation_summary": "",
+            "summary_message_count": 0,
+        }
+
     memory_result = _memory_command(text)
     if memory_result is not None:
         return {"messages": [AIMessage(content=memory_result)]}
 
     summary = memory_summary()
-    sys_msg = SystemMessage(content=build_chat_prompt(summary))
-    result = get_llm().invoke([sys_msg] + state["messages"])
+    conversation_summary = state.get("conversation_summary", "")
+    sys_msg = SystemMessage(content=build_chat_prompt(summary, conversation_summary))
+    messages = state.get("messages", [])
+    recent = messages[-_KEEP_RECENT:] if len(messages) > _KEEP_RECENT else messages
+    result = get_llm().invoke([sys_msg] + recent)
     return {"messages": [result]}
 
 
 def _is_memory_command(text: str) -> bool:
     stripped = text.strip()
-    return stripped.startswith(("记住", "忘记", "璁颁綇", "蹇樿")) or "查看记忆" in stripped or "鏌ョ湅璁板繂" in stripped
+    return stripped.startswith(("记住", "忘记")) or "查看记忆" in stripped or "清除摘要" in stripped
 
 
 def self_rag_node(state: OctGraphState) -> OctGraphState:
+    # 检索闸门：闲聊 / 与知识库无关的问题在检索前直接走对话，
+    # 避免空跑检索+grading，同时保留长期记忆（chat 注入 memory_summary）。
+    should_retrieve, gate_trace = decide_retrieval(state.get("messages", []))
+    if not should_retrieve:
+        fallback = chat(state)
+        return {
+            **fallback,
+            "self_rag_citations": [],
+            "self_rag_trace": {"gate": gate_trace},
+            "self_rag_error": "",
+        }
+
     question = _latest_user_text(state)
     try:
         result = run_knowledge_query(question)
@@ -353,25 +412,27 @@ def self_rag_node(state: OctGraphState) -> OctGraphState:
         return {
             **fallback,
             "self_rag_citations": result.get("citations", []),
-            "self_rag_trace": {"retrieval_trace": result.get("retrieval_trace", [])},
+            "self_rag_trace": {"gate": gate_trace, "retrieval_trace": result.get("retrieval_trace", [])},
             "self_rag_error": str(result.get("error") or ""),
         }
 
     return {
         "messages": [self_rag_message(result)],
         "self_rag_citations": result.get("citations", []),
-        "self_rag_trace": {"retrieval_trace": result.get("retrieval_trace", [])},
+        "self_rag_trace": {"gate": gate_trace, "retrieval_trace": result.get("retrieval_trace", [])},
         "self_rag_error": str(result.get("error") or ""),
     }
 
 
 agent_builder = StateGraph(OctGraphState)
+agent_builder.add_node("summarize_conversation", summarize_conversation)
 agent_builder.add_node("supervisor", supervisor)
 agent_builder.add_node("chat", chat)
 agent_builder.add_node("strain_estimation", strain_estimation)
 agent_builder.add_node("deep_research", deep_research_node)
 agent_builder.add_node("self_rag", self_rag_node)
-agent_builder.add_edge(START, "supervisor")
+agent_builder.add_edge(START, "summarize_conversation")
+agent_builder.add_edge("summarize_conversation", "supervisor")
 agent_builder.add_conditional_edges(
     "supervisor",
     route_for_subagent,

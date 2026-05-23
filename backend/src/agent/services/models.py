@@ -72,7 +72,7 @@ def load_model(
         raise FileNotFoundError(path)
 
     net = model_class(*args, **kwargs)
-    state = torch.load(path, map_location=device)
+    state = torch.load(path, map_location=device, weights_only=False)
     net.load_state_dict(state)
     net.to(device)
     net.eval()

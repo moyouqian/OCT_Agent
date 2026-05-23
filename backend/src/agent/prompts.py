@@ -123,6 +123,30 @@ Research brief:
 {notes}"""
 
 
+RETRIEVAL_GATE_PROMPT = """你是 OCT Agent 的检索闸门。请判断：要回答用户**最新**的问题，是否需要查询本地知识库。
+
+本地知识库的内容范围：
+{knowledge_domain}
+
+判断规则：
+- 若问题涉及上述范围内的事实、概念、方法、数据或论文内容，需要检索（needs_retrieval=true）。
+- 若是问候、寒暄、闲聊、与知识库无关的通用常识或纯操作指令，不需要检索（needs_retrieval=false）。
+- 若是依赖上文的追问，请结合最近对话推断其真实意图，再判断。
+- 拿不准时，一律倾向于需要检索（true）。
+
+请返回 JSON，字段为 needs_retrieval（布尔）和 reason（简短中文理由）。
+
+最近对话：
+{recent_context}"""
+
+
+def build_retrieval_gate_prompt(*, knowledge_domain: str, recent_context: str) -> str:
+    return RETRIEVAL_GATE_PROMPT.format(
+        knowledge_domain=knowledge_domain,
+        recent_context=recent_context,
+    )
+
+
 def build_strain_prompt(
     *,
     run_dir: str,
@@ -142,7 +166,28 @@ def build_strain_prompt(
     )
 
 
-def build_chat_prompt(memory_summary_text: str) -> str:
-    if not memory_summary_text:
-        return CHAT_PROMPT
-    return f"{CHAT_PROMPT}\n\n可参考的长期记忆：\n{memory_summary_text}"
+SUMMARIZE_PROMPT = """请将以下对话内容压缩为简洁的中文摘要，保留：研究目标、处理的文件与方法、重要结论与参数设置。忽略问候与无关闲聊。
+
+{existing_section}对话内容：
+{conversation}"""
+
+
+def build_chat_prompt(memory_summary_text: str, conversation_summary: str = "") -> str:
+    parts = [CHAT_PROMPT]
+    if conversation_summary:
+        parts.append(f"\n\n早期对话摘要（已压缩，供参考）：\n{conversation_summary}")
+    if memory_summary_text:
+        parts.append(f"\n\n可参考的长期记忆：\n{memory_summary_text}")
+    return "".join(parts)
+
+
+def build_summarize_prompt(conversation: str, existing_summary: str = "") -> str:
+    existing_section = (
+        f"已有摘要（请在此基础上合并新内容，不要丢失旧摘要信息）：\n{existing_summary}\n\n新增对话：\n"
+        if existing_summary
+        else ""
+    )
+    return SUMMARIZE_PROMPT.format(
+        existing_section=existing_section,
+        conversation=conversation,
+    )

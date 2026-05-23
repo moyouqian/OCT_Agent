@@ -206,6 +206,8 @@ def test_default_supervisor_routes_to_self_rag_without_llm():
 
 
 def test_self_rag_falls_back_to_chat(monkeypatch):
+    # 让闸门判定为"需要检索"，从而走到检索后兜底分支。
+    monkeypatch.setattr("agent.graph.decide_retrieval", lambda messages: (True, {"decision": "retrieve"}))
     monkeypatch.setattr(
         "agent.graph.run_knowledge_query",
         lambda question: {"error": "empty index", "documents": [], "generation": "", "_used_chat_fallback": True},
@@ -216,6 +218,36 @@ def test_self_rag_falls_back_to_chat(monkeypatch):
 
     assert result["messages"][0].content == "chat fallback"
     assert result["self_rag_error"] == "empty index"
+
+
+def test_retrieval_gate_short_circuits_empty_knowledge_base(monkeypatch):
+    from agent import self_rag
+
+    monkeypatch.setattr(self_rag, "knowledge_status", lambda: {"child_chunks": 0})
+
+    should_retrieve, trace = self_rag.decide_retrieval([HumanMessage(content="你好")])
+
+    assert should_retrieve is False
+    assert trace["tier"] == "empty_kb"
+
+
+def test_self_rag_node_gate_skips_retrieval(monkeypatch):
+    monkeypatch.setattr(
+        "agent.graph.decide_retrieval",
+        lambda messages: (False, {"decision": "direct", "tier": "llm", "reason": "闲聊"}),
+    )
+
+    def _fail_if_called(question):
+        raise AssertionError("run_knowledge_query should not run when gate routes to direct chat")
+
+    monkeypatch.setattr("agent.graph.run_knowledge_query", _fail_if_called)
+    monkeypatch.setattr("agent.graph.chat", lambda state: {"messages": [AIMessage(content="hi")]})
+
+    result = self_rag_node({"messages": [HumanMessage(content="你好")]})
+
+    assert result["messages"][0].content == "hi"
+    assert result["self_rag_trace"]["gate"]["decision"] == "direct"
+    assert result["self_rag_citations"] == []
 
 
 def test_self_rag_config_uses_backend_internal_data_dir():
@@ -373,3 +405,50 @@ def test_get_llm_raises_when_selected_provider_incomplete(monkeypatch):
         assert "SiliconFlow" in str(exc)
     assert with_error, "incomplete provider config should raise RuntimeError"
     config.get_llm.cache_clear()
+
+
+def test_summarize_conversation_skips_when_below_threshold():
+    from agent.graph import summarize_conversation
+    state = {"messages": [HumanMessage(content=f"msg {i}") for i in range(10)]}
+    result = summarize_conversation(state)
+    assert result == {}
+
+
+def test_summarize_conversation_calls_llm_above_threshold(monkeypatch):
+    from agent import graph as g
+    from agent.graph import summarize_conversation
+
+    monkeypatch.setattr(g, "get_llm", lambda: type("M", (), {
+        "invoke": lambda self, msgs: type("R", (), {"content": "摘要内容"})()
+    })())
+
+    msgs = [HumanMessage(content=f"msg {i}") for i in range(25)]
+    state = {"messages": msgs, "summary_message_count": 0, "conversation_summary": ""}
+    result = summarize_conversation(state)
+
+    assert result.get("conversation_summary") == "摘要内容"
+    assert result.get("summary_message_count") == len(msgs) - 6
+
+
+def test_summarize_conversation_skips_when_no_new_messages():
+    from agent.graph import summarize_conversation
+    msgs = [HumanMessage(content=f"msg {i}") for i in range(25)]
+    state = {
+        "messages": msgs,
+        "summary_message_count": len(msgs) - 6,
+        "conversation_summary": "已有摘要",
+    }
+    result = summarize_conversation(state)
+    assert result == {}
+
+
+def test_clear_summary_command_resets_state():
+    from agent.graph import chat
+    result = chat({
+        "messages": [HumanMessage(content="清除摘要")],
+        "conversation_summary": "旧摘要",
+        "summary_message_count": 10,
+    })
+    assert result["conversation_summary"] == ""
+    assert result["summary_message_count"] == 0
+    assert "清除" in result["messages"][0].content

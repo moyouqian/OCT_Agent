@@ -64,8 +64,6 @@ class OctGraphState(TypedDict, total=False):
     self_rag_trace: dict[str, Any]
     self_rag_error: str
 
-
-class TaskAssignment(TypedDict):
-    """Decision on what task type to execute."""
-
-    update_type: Literal["strain_estimation", "deep_research", "self_rag", "chat"]
+    # --- 短期记忆 ---
+    conversation_summary: str
+    summary_message_count: int

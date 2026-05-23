@@ -251,6 +251,7 @@ def save_bnn_result(
             "result_path": str(result_path),
             "kind": "bnn",
             "format": "mat",
+            "shape": list(strain.shape),
             "outputs": {
                 "strain": {"shape": list(strain.shape)},
                 "epistemic_uncertainty": {"shape": list(epistemic_uncertainty.shape)},

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Literal
 
@@ -21,6 +22,7 @@ from agent.prompts import (
 from agent.research.schemas import ClarifyWithUser, ResearchPlan, ResearchQuestion, SearchQueries
 from agent.research.sources import search_all_sources
 from agent.schemas import OctGraphState
+from agent.utils.messages import latest_user_text
 from agent.utils.structured import invoke_structured_json_schema
 
 
@@ -29,10 +31,7 @@ def _today() -> str:
 
 
 def _latest_user_text(state: OctGraphState) -> str:
-    for msg in reversed(state.get("messages", [])):
-        if getattr(msg, "type", "") == "human":
-            return str(msg.content)
-    return ""
+    return latest_user_text(state.get("messages", []))
 
 
 def _content_to_text(content: Any) -> str:
@@ -265,25 +264,32 @@ def plan_research(state: OctGraphState) -> OctGraphState:
     return {"research_topics": plan.topics}
 
 
+def _research_one_topic(topic: str) -> str:
+    """Research a single topic: generate queries, fetch sources, compress notes."""
+    prompt = RESEARCH_QUERY_PROMPT.format(topic=topic)
+    query_result = invoke_structured_json_schema(
+        get_llm(),
+        SearchQueries,
+        [HumanMessage(content=prompt)],
+        fallback_fn=lambda _, research_topic=topic: _fallback_search_queries(research_topic),
+    )
+    source_results = search_all_sources(query_result.queries, max_results=3)
+    material = _source_material(source_results)
+    return _safe_compress_note(topic, material)
+
+
 def conduct_research(state: OctGraphState) -> OctGraphState:
-    """Search sources for each topic and compress findings."""
+    """Search sources for each topic and compress findings. Topics run in parallel."""
 
-    notes: list[str] = []
     topics = state.get("research_topics") or [state.get("research_brief", _latest_user_text(state))]
+    notes: list[str | None] = [None] * len(topics)
 
-    for topic in topics:
-        prompt = RESEARCH_QUERY_PROMPT.format(topic=topic)
-        query_result = invoke_structured_json_schema(
-            get_llm(),
-            SearchQueries,
-            [HumanMessage(content=prompt)],
-            fallback_fn=lambda _, research_topic=topic: _fallback_search_queries(research_topic),
-        )
-        source_results = search_all_sources(query_result.queries, max_results=3)
-        material = _source_material(source_results)
-        notes.append(_safe_compress_note(topic, material))
+    with ThreadPoolExecutor(max_workers=max(1, len(topics))) as pool:
+        future_to_index = {pool.submit(_research_one_topic, topic): i for i, topic in enumerate(topics)}
+        for future in as_completed(future_to_index):
+            notes[future_to_index[future]] = future.result()
 
-    return {"research_notes": notes}
+    return {"research_notes": [n for n in notes if n is not None]}
 
 
 def final_report_generation(state: OctGraphState) -> OctGraphState:
