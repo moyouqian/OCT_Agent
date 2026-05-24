@@ -240,3 +240,15 @@ __marimo__/
 
 !frontend/src/lib/
 !frontend/src/lib/**
+
+# Claude Code / 编辑器本地配置
+.claude/
+.vscode/
+
+# 模型权重（保留 assets/ 下的网络定义源码，仅忽略权重文件）
+*.pth
+*.pt
+*.ckpt
+
+# 内部计划文档（skill 生成，不入库）
+docs/superpowers/
