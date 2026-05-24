@@ -17,7 +17,7 @@ REFERENCE_SECTION_RE = re.compile(
 )
 
 BIBLIOGRAPHY_MARKER_RE = re.compile(
-    r"(\[\s*\d+\s*\]|\(\s*\d+\s*\)|\bdoi\s*:|\bDOI\s*:|\bet\s+al\.?|"
+    r"(\bdoi\s*:|\bDOI\s*:|\bet\s+al\.?|"
     r"\[[JMC]\]|,\s*\d{4}\s*,\s*\d+\s*\(\s*\d+\s*\)\s*:\s*\d+[-–]\d+|"
     r"\bVol\.\s*\d+|\bNo\.\s*\d+)",
     re.IGNORECASE,
@@ -80,25 +80,27 @@ RECOMMENDATION_HEADING_RE = re.compile(
 )
 
 ACADEMIC_HEADING_RE = re.compile(
-    r"^\s*((\d+|[ivxlcdm]+)\.?\s*)?"
+    r"^\s*(((\d+|[ivxlcdm]+)\.?|[一二三四五六七八九十]+[、.]?)\s*)?"
     r"(abstract|introduction|background|related\s+work|methods?|materials\s+and\s+methods|"
-    r"experiments?|experimental\s+setup|results?|discussion|conclusions?|acknowledg(e)?ments?|funding)"
+    r"experiments?|experimental\s+setup|results?|discussion|conclusions?|acknowledg(e)?ments?|funding|"
+    r"摘要|引言|前言|相关工作|材料与方法|方法|实验结果|实验|结果与讨论|结果|讨论|结论|致谢|基金|资助)"
     r"\s*$",
     re.IGNORECASE,
 )
 
 
-def clean_blocks(blocks: Iterable[Any], config: Any) -> Tuple[List[Any], Dict[str, Any]]:
+def clean_blocks(blocks: Iterable[Any], config: Any, source_type: str = "paper") -> Tuple[List[Any], Dict[str, Any]]:
     """Annotate common paper noise before parent/child chunking."""
 
     block_list = list(blocks)
     if not getattr(config, "enable_document_cleaning", True):
         return block_list, {"enabled": False, "input_blocks": len(block_list), "output_blocks": len(block_list)}
-    return annotate_blocks(block_list, config)
+    return annotate_blocks(block_list, config, source_type)
 
 
-def annotate_blocks(blocks: Iterable[Any], config: Any) -> Tuple[List[Any], Dict[str, Any]]:
+def annotate_blocks(blocks: Iterable[Any], config: Any, source_type: str = "paper") -> Tuple[List[Any], Dict[str, Any]]:
     block_list = list(blocks)
+    is_note = source_type in {"note", "text"}
 
     repeated_lines = (
         find_repeated_page_lines(block_list, getattr(config, "repeated_header_min_pages", 2))
@@ -110,17 +112,58 @@ def annotate_blocks(blocks: Iterable[Any], config: Any) -> Tuple[List[Any], Dict
     noise_counts = defaultdict(int)
     role_counts = defaultdict(int)
     references_started = False
+    reference_level = 0
     recommendation_page = None
 
     for block in block_list:
+        # Code blocks are preserved verbatim regardless of source type
+        # (no whitespace normalization, no hyphen joining, no noise regex).
+        if getattr(block, "block_type", "") == "code":
+            raw = getattr(block, "text", "") or ""
+            setattr(block, "text", raw)
+            setattr(block, "text_for_display", raw)
+            setattr(block, "text_for_embedding", raw)
+            setattr(block, "role", "body")
+            setattr(block, "noise_reason", "")
+            role_counts["body"] += 1
+            annotated.append(block)
+            continue
+        # Notes / plain text get light cleaning only: whitespace normalization,
+        # empty-block marking, and NO paper-layout noise rules or reference swallowing.
+        if is_note:
+            raw = re.sub(r"[ \t]+", " ", getattr(block, "text", "") or "").strip()
+            note_role = "body" if raw else "noise"
+            setattr(block, "text", raw)
+            setattr(block, "text_for_display", raw)
+            setattr(block, "text_for_embedding", raw)
+            setattr(block, "role", note_role)
+            setattr(block, "noise_reason", "" if raw else "empty")
+            if note_role == "noise":
+                noise_counts["empty"] += 1
+            role_counts[note_role] += 1
+            annotated.append(block)
+            continue
+
         text = normalize_scientific_text(getattr(block, "text", "") or "")
         role = getattr(block, "role", "body") or "body"
         noise_reason = getattr(block, "noise_reason", "") or ""
 
-        if is_reference_heading(block) and getattr(config, "clean_exclude_references", True):
+        exclude_refs = getattr(config, "clean_exclude_references", True)
+        is_heading = getattr(block, "block_type", "") in {"title", "section_header"}
+        block_level = getattr(block, "level", 0) or 1
+        # References section ends at the next heading whose level is no deeper than the
+        # reference heading (e.g. an Appendix sibling). Assumes the reference heading's
+        # level (from heading_level) is typically 2; if it were misdetected as 1 (title),
+        # a level-2 appendix could still be swallowed — a known boundary.
+        if references_started and exclude_refs and is_heading and not is_reference_heading(block) and block_level <= reference_level:
+            references_started = False
+            reference_level = 0
+
+        if is_reference_heading(block) and exclude_refs:
             references_started = True
+            reference_level = block_level
             role = "reference"
-        elif references_started and getattr(config, "clean_exclude_references", True):
+        elif references_started and exclude_refs:
             role = "reference"
         elif is_reference_section_path(getattr(block, "section_path", "")):
             role = "reference"

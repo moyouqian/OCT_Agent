@@ -70,6 +70,7 @@ def build_parent_chunks(parsed: ParsedDocument, config: SelfRagConfig) -> tuple[
         sections = sectionize_by_block_metadata(parsed.blocks)
     else:
         sections = sectionize(parsed.blocks)
+    sections = merge_small_sections(sections, config)
     parents: List[ParentChunk] = []
     assets: List[AssetRecord] = []
     asset_index = 0
@@ -248,6 +249,99 @@ def sectionize_by_block_metadata(blocks: Iterable[Block]) -> List[Dict[str, Any]
             sections.append(current)
         current["blocks"].append(block)
     return sections
+
+
+def section_text_tokens(section: Dict[str, Any]) -> int:
+    parts = [
+        (getattr(b, "text_for_display", "") or b.text)
+        for b in section["blocks"]
+        if b.block_type not in {"figure", "table", "equation"}
+        and getattr(b, "role", "body") not in {"reference", "furniture", "noise"}
+    ]
+    return estimated_tokens("\n".join(p for p in parts if p))
+
+
+def is_asset_only(section: Dict[str, Any]) -> bool:
+    return section_text_tokens(section) == 0 and any(
+        b.block_type in {"figure", "table", "equation"} for b in section["blocks"]
+    )
+
+
+def is_parent_child(path_a: str, path_b: str) -> bool:
+    a, b = (path_a or "").strip(), (path_b or "").strip()
+    if not a or not b or a == b:
+        return False
+    return b.startswith(a + " > ") or a.startswith(b + " > ")
+
+
+def section_has_body_content(section: Dict[str, Any]) -> bool:
+    return any(
+        b.block_type not in {"title", "section_header", "figure", "table", "equation"}
+        and (getattr(b, "text_for_display", "") or b.text or "").strip()
+        and getattr(b, "role", "body") not in {"reference", "furniture", "noise"}
+        for b in section["blocks"]
+    )
+
+
+def merge_two(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
+    # A heading-only section (e.g. a document title) must not lend its path to the
+    # merged unit, or it would keep qualifying as the parent of the next sibling and
+    # cascade-swallow siblings. Adopt the content-bearing section's identity instead.
+    dst_body, src_body = section_has_body_content(dst), section_has_body_content(src)
+    if dst_body and not src_body:
+        path, level = dst["path"], dst["level"]
+    elif src_body and not dst_body:
+        path, level = src["path"], src["level"]
+    # Otherwise keep the higher-level identity (shorter path / smaller level).
+    elif len((src["path"] or "").split(" > ")) < len((dst["path"] or "").split(" > ")):
+        path, level = src["path"], src["level"]
+    else:
+        path, level = dst["path"], dst["level"]
+    return {
+        "path": path,
+        "level": min(dst["level"], src["level"]) or level,
+        "blocks": dst["blocks"] + src["blocks"],
+    }
+
+
+def merge_small_sections(sections: List[Dict[str, Any]], config: SelfRagConfig) -> List[Dict[str, Any]]:
+    """Merge undersized sections into a parent/sibling so tiny parents are not emitted.
+
+    Only parent-child pairs (one section_path nests under the other) or untitled
+    fragments are merged; named siblings stay separate. Asset-only sections are
+    never merged. Merging stops once the combined text would exceed the parent max.
+    """
+
+    result = list(sections)
+    max_tokens = config.parent_chunk_max_tokens
+    min_tokens = config.parent_chunk_min_tokens
+    changed = True
+    while changed:
+        changed = False
+        for i, sec in enumerate(result):
+            if is_asset_only(sec) or section_text_tokens(sec) >= min_tokens:
+                continue
+            # Candidate neighbours: parent-child merge first, then untitled fragment into prev/next.
+            for j in (i + 1, i - 1):
+                if j < 0 or j >= len(result):
+                    continue
+                neighbor = result[j]
+                if is_asset_only(neighbor):
+                    continue
+                path = (sec["path"] or "").strip()
+                is_fragment = path in {"", "Untitled"}
+                if not (is_parent_child(sec["path"], neighbor["path"]) or is_fragment):
+                    continue
+                if section_text_tokens(sec) + section_text_tokens(neighbor) > max_tokens:
+                    continue
+                lo, hi = min(i, j), max(i, j)
+                merged = merge_two(result[lo], result[hi])
+                result[lo:hi + 1] = [merged]
+                changed = True
+                break
+            if changed:
+                break
+    return result
 
 
 def render_section_text(section_path: str, blocks: List[Block]) -> str:

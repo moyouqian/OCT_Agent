@@ -67,22 +67,7 @@ class ChunkQualityStats:
                 self.oversize_child_chunks += 1
             if (child.metadata or {}).get("split_reason") == "hard_limit":
                 self.hard_limit_child_chunks += 1
-            add_mojibake_warning(self, title, child.section_path, text)
-
-
-def extract_pdf_text(file_path: str) -> str:
-    try:
-        import pdfplumber
-
-        with pdfplumber.open(file_path) as pdf:
-            pages = [page.extract_text() or "" for page in pdf.pages]
-        return "\n".join(pages).strip()
-    except Exception:
-        from PyPDF2 import PdfReader
-
-        reader = PdfReader(file_path)
-        pages = [page.extract_text() or "" for page in reader.pages]
-        return "\n".join(pages).strip()
+            add_mojibake_warning(self, title, child.section_path, text, config.mojibake_extra_chars)
 
 
 def extract_docx_text(file_path: str) -> str:
@@ -106,44 +91,13 @@ def extract_docx_text(file_path: str) -> str:
     return "\n".join(parts).strip()
 
 
-def extract_text(file_path: str) -> str:
-    path = Path(file_path)
-    ext = path.suffix.lower()
-    if ext == ".pdf":
-        return extract_pdf_text(file_path)
-    if ext == ".docx":
-        return extract_docx_text(file_path)
-    if ext in {".txt", ".md"}:
-        return path.read_text(encoding="utf-8").strip()
-    raise ValueError(f"Unsupported file type: {ext}")
-
-
-def clean_text(text: str) -> str:
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-def split_text(text: str, chunk_size: int, chunk_overlap: int) -> List[str]:
-    try:
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
-    except ImportError as exc:
-        raise RuntimeError("Install the ingestion extra to split documents.") from exc
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", ". ", "! ", "? ", ".", "!", "?", " "],
-    )
-    return splitter.split_text(text)
-
-
 def ingest_file(
     file_path: str,
     config: Optional[SelfRagConfig] = None,
     embedder=None,
     store: Optional[ChromaMemoryStore] = None,
     parent_store: Optional[SQLiteParentStore] = None,
+    rebuild_bm25: bool = True,
 ) -> Dict[str, Any]:
     config = config or SelfRagConfig()
     embedder = embedder or build_embedding_backend(config)
@@ -167,6 +121,23 @@ def ingest_file(
             "reference_blocks": 0,
             "grobid_status": "skipped",
         }
+
+    if not existing:
+        dup = parent_store.get_document_by_content_hash(content_hash)
+        if dup and dup.get("source_path") != source_path:
+            return {
+                "skipped": 1,
+                "total_parents": 0,
+                "total_children": 0,
+                "ingested_children": 0,
+                "assets": 0,
+                "references": 0,
+                "noise_blocks": 0,
+                "furniture_blocks": 0,
+                "reference_blocks": 0,
+                "grobid_status": "skipped",
+                "duplicate_of": dup.get("source_path"),
+            }
 
     if existing:
         child_ids = parent_store.list_child_ids_for_doc(existing["doc_id"])
@@ -208,8 +179,12 @@ def ingest_file(
             children = build_child_chunks(parent, config)
             quality.add_children(parsed.title, children, config)
             total_children += len(children)
-            for child in children:
-                embedding = embedder.get_embedding(child.embedding_text)
+            texts = [child.embedding_text for child in children]
+            if hasattr(embedder, "get_embeddings"):
+                embeddings = embedder.get_embeddings(texts)
+            else:
+                embeddings = [embedder.get_embedding(text) for text in texts]
+            for child, embedding in zip(children, embeddings):
                 store.store_child_chunk(
                     child.child_id,
                     child.embedding_text,
@@ -228,9 +203,10 @@ def ingest_file(
         for reference in getattr(parsed, "references", []):
             parent_store.upsert_reference(asdict(reference))
 
-        from .retrieval import rebuild_bm25_files
+        if rebuild_bm25:
+            from .retrieval import rebuild_bm25_files
 
-        rebuild_bm25_files(config, parent_store)
+            rebuild_bm25_files(config, parent_store)
     except Exception:
         store.delete_ids(stored_child_ids)
         parent_store.delete_document(parsed.doc_id)
@@ -269,7 +245,12 @@ def ingest_many(paths: Iterable[str], config: Optional[SelfRagConfig] = None) ->
             embedder=embedder,
             store=store,
             parent_store=parent_store,
+            rebuild_bm25=False,
         )
+    if any(not result.get("skipped") for result in results.values()):
+        from .retrieval import rebuild_bm25_files
+
+        rebuild_bm25_files(config, parent_store)
     return results
 
 
@@ -420,6 +401,7 @@ def run_batch_ingestion(
                 embedder=embedder,
                 store=store,
                 parent_store=parent_store,
+                rebuild_bm25=False,
             )
         except Exception as exc:
             summary["failed_files"] += 1
@@ -442,6 +424,10 @@ def run_batch_ingestion(
         ):
             summary[key] += int(result.get(key, 0))
         merge_result_quality(summary, result)
+    if summary["processed_files"] > 0:
+        from .retrieval import rebuild_bm25_files
+
+        rebuild_bm25_files(config, parent_store)
     return summary
 
 
@@ -480,7 +466,7 @@ def analyze_chunks(title: str, parents: List[Any], children: List[Any], config: 
             quality.empty_parent_chunks += 1
         if estimated_parent_tokens(parent) > config.parent_chunk_max_tokens:
             quality.oversize_parent_chunks += 1
-        add_mojibake_warning(quality, title, parent.section_path, text)
+        add_mojibake_warning(quality, title, parent.section_path, text, config.mojibake_extra_chars)
     quality.add_children(title, children, config)
     return quality
 
@@ -493,33 +479,35 @@ def estimated_child_tokens(child: Any) -> int:
     return int((child.metadata or {}).get("estimated_tokens", 0))
 
 
-def add_mojibake_warning(quality: ChunkQualityStats, title: str, section: str, text: str) -> None:
+def add_mojibake_warning(quality: ChunkQualityStats, title: str, section: str, text: str, extra_chars: str = "") -> None:
     if not text:
         return
-    count = mojibake_score(text)
+    count = mojibake_score(text, extra_chars)
     if count >= 20 or count / max(len(text), 1) >= 0.02:
         quality.mojibake_warnings += 1
         if len(quality.warnings) < 20:
             quality.warnings.append(f"Possible mojibake in {title} / {section}")
 
 
-def mojibake_score(text: str) -> int:
-    markers = (
-        "\ufffd",
-        "\u951f",
-        "\u9286",
-        "\u934f",
-        "\u7b97",
-        "\u9435",
-        "\u701b",
-        "\u9a9e",
-        "\u6e2d",
-        "\u5a09",
-        "\u6434",
-        "\u677b",
-        "\u59af",
-    )
-    return sum(text.count(marker) for marker in markers)
+KNOWN_MOJIBAKE_CHARS = "\u951f\u9286\u934f\u7b97\u9435\u701b\u9a9e\u6e2d\u5a09\u6434\u677b\u59af"
+_CID_RE = re.compile(r"\(cid:\d+\)")
+
+
+def mojibake_score(text: str, extra_chars: str = "") -> int:
+    if not text:
+        return 0
+    score = 0
+    score += text.count("\ufffd")  # U+FFFD replacement character
+    score += len(_CID_RE.findall(text))  # leftover (cid:N) glyph fallbacks
+    score += sum(1 for ch in text if "" <= ch <= "")  # private use area
+    # C0/C1 control characters (except common whitespace)
+    score += sum(1 for ch in text if (ord(ch) < 0x20 and ch not in "\n\t\r") or 0x80 <= ord(ch) <= 0x9f)
+    # Known recurring mojibake glyphs from broken CJK encodings.
+    # Note: legitimate Hanzi mangled into *other* valid Hanzi outside this table
+    # cannot be detected heuristically \u2014 that is an inherent limitation.
+    known = KNOWN_MOJIBAKE_CHARS + (extra_chars or "")
+    score += sum(text.count(ch) for ch in known)
+    return score
 
 
 def count_role(blocks: Iterable[Any], role: str) -> int:

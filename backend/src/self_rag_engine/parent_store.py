@@ -43,6 +43,9 @@ class SQLiteParentStore:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE INDEX IF NOT EXISTS idx_documents_content_hash
+                ON documents(content_hash);
+
                 CREATE TABLE IF NOT EXISTS parent_chunks (
                     parent_id TEXT PRIMARY KEY,
                     doc_id TEXT NOT NULL,
@@ -362,6 +365,13 @@ class SQLiteParentStore:
     def get_document_by_source_path(self, source_path: str) -> Optional[Dict[str, Any]]:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM documents WHERE source_path = ?", (source_path,)).fetchone()
+        return decode_row(row) if row else None
+
+    def get_document_by_content_hash(self, content_hash: str) -> Optional[Dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM documents WHERE content_hash = ? LIMIT 1", (content_hash,)
+            ).fetchone()
         return decode_row(row) if row else None
 
     def get_parent(self, parent_id: str) -> Optional[Dict[str, Any]]:

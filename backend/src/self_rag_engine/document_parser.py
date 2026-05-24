@@ -126,7 +126,7 @@ def parse_pdf_docling_only(file_path: Path, config: SelfRagConfig) -> ParsedDocu
 
     body_blocks, furniture_blocks, docling_report = extract_docling_blocks(doc, fallback_markdown=markdown)
     aligned_blocks, alignment_report = align_docling_grobid(body_blocks, furniture_blocks, None, config)
-    blocks, cleaning_report = clean_blocks(aligned_blocks, config)
+    blocks, cleaning_report = clean_blocks(aligned_blocks, config, source_type="paper")
     title = extract_title(blocks, fallback=file_path.stem)
     return ParsedDocument(
         doc_id=doc_id,
@@ -169,7 +169,7 @@ def parse_pdf_docling_grobid(file_path: Path, config: SelfRagConfig) -> ParsedDo
             grobid_status = "failed"
 
     aligned_blocks, alignment_report = align_docling_grobid(body_blocks, furniture_blocks, grobid_doc, config)
-    blocks, cleaning_report = clean_blocks(aligned_blocks, config)
+    blocks, cleaning_report = clean_blocks(aligned_blocks, config, source_type="paper")
     fallback_title = extract_title(blocks, fallback=file_path.stem)
     title = getattr(grobid_doc, "title", "") or fallback_title
     references = list(getattr(grobid_doc, "references", []) or [])
@@ -371,7 +371,7 @@ def parse_markdown_file(file_path: Path, config: Optional[SelfRagConfig] = None)
     doc_id = stable_id("doc", str(file_path.resolve()), content_hash)
     body, metadata = split_frontmatter(text)
     raw_blocks = markdown_blocks(body)
-    blocks, cleaning_report = clean_blocks(raw_blocks, config)
+    blocks, cleaning_report = clean_blocks(raw_blocks, config, source_type="note")
     title = metadata.get("title") or extract_title(blocks, fallback=file_path.stem)
     return ParsedDocument(
         doc_id=doc_id,
@@ -392,7 +392,7 @@ def parse_plain_text_file(file_path: Path, config: Optional[SelfRagConfig] = Non
     content_hash = hash_file(file_path)
     doc_id = stable_id("doc", str(file_path.resolve()), content_hash)
     raw_blocks = text_blocks(text)
-    blocks, cleaning_report = clean_blocks(raw_blocks, config)
+    blocks, cleaning_report = clean_blocks(raw_blocks, config, source_type="text")
     return ParsedDocument(
         doc_id=doc_id,
         source_path=str(file_path.resolve()),
@@ -414,7 +414,7 @@ def parse_docx_file(file_path: Path, config: Optional[SelfRagConfig] = None) -> 
     content_hash = hash_file(file_path)
     doc_id = stable_id("doc", str(file_path.resolve()), content_hash)
     raw_blocks = markdown_blocks(text)
-    blocks, cleaning_report = clean_blocks(raw_blocks, config)
+    blocks, cleaning_report = clean_blocks(raw_blocks, config, source_type="text")
     return ParsedDocument(
         doc_id=doc_id,
         source_path=str(file_path.resolve()),
@@ -426,43 +426,6 @@ def parse_docx_file(file_path: Path, config: Optional[SelfRagConfig] = None) -> 
         blocks=blocks,
         metadata={"cleaning": cleaning_report},
     )
-
-
-def docling_blocks(doc: Any, fallback_markdown: str = "") -> List[Block]:
-    blocks: List[Block] = []
-    items = []
-    for attr in ("texts", "tables", "pictures"):
-        values = getattr(doc, attr, None) or []
-        items.extend(values)
-
-    if not items and fallback_markdown:
-        return markdown_blocks(fallback_markdown)
-
-    for index, item in enumerate(items):
-        text = item_text(item).strip()
-        label = str(getattr(item, "label", "") or getattr(item, "name", "") or "").lower()
-        block_type = docling_block_type(label, item)
-        page_start, page_end, bboxes = provenance(item)
-        caption = item_caption(item)
-        if not text and caption:
-            text = caption
-        if not text and block_type not in {"figure", "table", "equation"}:
-            continue
-        blocks.append(
-            Block(
-                block_id=f"b{index}",
-                block_type=block_type,
-                text=text,
-                level=heading_level(block_type, text),
-                page_start=page_start,
-                page_end=page_end,
-                docling_ref=str(getattr(item, "self_ref", "") or ""),
-                bbox_list=bboxes,
-                caption=caption,
-                raw_payload={"label": label},
-            )
-        )
-    return blocks
 
 
 def markdown_blocks(text: str) -> List[Block]:
@@ -646,7 +609,11 @@ def extract_title(blocks: List[Block], fallback: str) -> str:
 
 
 def is_common_section_heading(text: str) -> bool:
-    normalized = re.sub(r"^\s*(\d+(\.\d+)*|[ivxlcdm]+|[a-z])\.?\s+", "", text.strip().lower())
+    normalized = re.sub(
+        r"^\s*([一二三四五六七八九十]+[、.]\s*|(\d+(\.\d+)*|[ivxlcdm]+|[a-z])\.?\s+)",
+        "",
+        text.strip().lower(),
+    )
     normalized = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", normalized).strip()
     return normalized in {
         "abstract",
@@ -666,6 +633,17 @@ def is_common_section_heading(text: str) -> bool:
         "acknowledgement",
         "acknowledgements",
         "参考文献",
+        "摘要",
+        "引言",
+        "前言",
+        "相关工作",
+        "方法",
+        "材料与方法",
+        "实验",
+        "结果",
+        "讨论",
+        "结论",
+        "致谢",
     }
 
 

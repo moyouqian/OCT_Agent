@@ -58,6 +58,12 @@ class OpenAICompatibleEmbedding:
         response = self.client.embeddings.create(model=self.model, input=text)
         return response.data[0].embedding
 
+    def get_embeddings(self, texts: List[str]) -> List[List[float]]:
+        if not texts:
+            return []
+        response = self.client.embeddings.create(model=self.model, input=texts)
+        return [item.embedding for item in response.data]
+
 
 class SentenceTransformerEmbedder:
     """Local embedding fallback."""
@@ -72,6 +78,11 @@ class SentenceTransformerEmbedder:
 
     def get_embedding(self, text: str) -> List[float]:
         return self.model.encode([text])[0].tolist()
+
+    def get_embeddings(self, texts: List[str]) -> List[List[float]]:
+        if not texts:
+            return []
+        return [vec.tolist() for vec in self.model.encode(texts)]
 
 
 class LocalLlamaChat:

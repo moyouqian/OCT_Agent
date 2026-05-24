@@ -144,6 +144,7 @@ class SelfRagConfig:
     clean_exclude_references: bool = field(default_factory=lambda: _env_bool("SELF_RAG_CLEAN_EXCLUDE_REFERENCES", True))
     clean_repeated_headers: bool = field(default_factory=lambda: _env_bool("SELF_RAG_CLEAN_REPEATED_HEADERS", True))
     repeated_header_min_pages: int = field(default_factory=lambda: int(os.getenv("SELF_RAG_REPEATED_HEADER_MIN_PAGES", "2")))
+    mojibake_extra_chars: str = field(default_factory=lambda: os.getenv("SELF_RAG_MOJIBAKE_EXTRA_CHARS", ""))
     citation_style: str = field(default_factory=lambda: os.getenv("SELF_RAG_CITATION_STYLE", "coarse"))
     show_related_assets: bool = field(default_factory=lambda: _env_bool("SELF_RAG_SHOW_RELATED_ASSETS", True))
     send_assets_to_llm: bool = field(default_factory=lambda: _env_bool("SELF_RAG_SEND_ASSETS_TO_LLM", False))

@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import os
 import pickle
 
 from rank_bm25 import BM25Okapi
@@ -282,16 +283,20 @@ def build_bm25_artifacts(parent_store: SQLiteParentStore, config: Optional[SelfR
     return documents, metadata, index
 
 
+def _atomic_pickle(path: Path, obj: Any) -> None:
+    tmp = str(path) + ".tmp"
+    with open(tmp, "wb") as handle:
+        pickle.dump(obj, handle)
+    os.replace(tmp, path)
+
+
 def rebuild_bm25_files(config: SelfRagConfig, parent_store: SQLiteParentStore) -> None:
     documents, metadata, index = build_bm25_artifacts(parent_store, config)
     bm25_path = Path(config.bm25_dir)
     bm25_path.mkdir(parents=True, exist_ok=True)
-    with (bm25_path / "bm25_index.pkl").open("wb") as handle:
-        pickle.dump(index, handle)
-    with (bm25_path / "bm25_docs.pkl").open("wb") as handle:
-        pickle.dump(documents, handle)
-    with (bm25_path / "bm25_meta.pkl").open("wb") as handle:
-        pickle.dump(metadata, handle)
+    _atomic_pickle(bm25_path / "bm25_index.pkl", index)
+    _atomic_pickle(bm25_path / "bm25_docs.pkl", documents)
+    _atomic_pickle(bm25_path / "bm25_meta.pkl", metadata)
 
 
 def compact_asset(asset: Dict[str, Any]) -> Dict[str, Any]:
