@@ -122,7 +122,6 @@ def get_self_rag_config() -> SelfRagConfig:
     config.bm25_domain_terms_path = str(_resolve_data_path(config.bm25_domain_terms_path, "config", "domain_terms.txt"))
     if not config.rerank_model:
         config.use_rerank = False
-        config.use_cross_encoder = False
     return config
 
 

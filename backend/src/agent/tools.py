@@ -42,6 +42,25 @@ from agent.services.storage import (
 )
 
 
+def _classify_error(exc: Exception) -> tuple[str, bool]:
+    """返回 (error_code, retryable)。"""
+    msg = str(exc).lower()
+    # 模型权重缺失同样抛 FileNotFoundError，须在通用 FILE_NOT_FOUND 之前拦截，
+    # 否则该分支永不可达。权重文件后缀恒为 .pth，输入是 .mat，用 .pth 判定
+    # 既精确又不会把名字含 "model" 的输入文件误判为模型缺失。
+    if isinstance(exc, (FileNotFoundError, OSError)) and ".pth" in msg:
+        return "MODEL_NOT_FOUND", False
+    if isinstance(exc, (FileNotFoundError, IsADirectoryError)):
+        return "FILE_NOT_FOUND", False
+    if isinstance(exc, ValueError):
+        return "INVALID_PARAMS", True
+    if "out of memory" in msg or ("cuda" in msg and "memory" in msg):
+        return "GPU_OOM", True
+    if isinstance(exc, (RuntimeError, np.linalg.LinAlgError, FloatingPointError)):
+        return "COMPUTATION_ERROR", False
+    return "UNKNOWN_ERROR", False
+
+
 def _select_file_id(file_id: str | None, file_ids: list[str] | None) -> str | None:
     if file_id:
         return file_id
@@ -52,7 +71,6 @@ def _select_file_id(file_id: str | None, file_ids: list[str] | None) -> str | No
 
 def _run_strain_tool(
     method: str,
-    error_label: str,
     file_id: str,
     file_ids: list[str] | None,
     file_path: str,
@@ -69,7 +87,17 @@ def _run_strain_tool(
         ref = compute_and_save(resolved_path, resolved_file_id)
         return json.dumps({"status": "success", "method": method, "ref": ref}, ensure_ascii=False)
     except Exception as exc:
-        return f"{error_label}计算过程中发生错误: {exc}"
+        error_code, retryable = _classify_error(exc)
+        return json.dumps(
+            {
+                "status": "error",
+                "method": method,
+                "error_code": error_code,
+                "error_message": str(exc),
+                "retryable": retryable,
+            },
+            ensure_ascii=False,
+        )
 
 
 def _physical_kwargs(physical_params: dict[str, Any] | None) -> dict[str, float]:
@@ -192,7 +220,7 @@ def vector_method_g(
         )
         return save_array_result(run_dir, resolved_path, result_key, strain, resolved_file_id)
 
-    return _run_strain_tool("vector", "矢量法", file_id, file_ids, file_path, _compute)
+    return _run_strain_tool("vector", file_id, file_ids, file_path, _compute)
 
 
 @tool
@@ -210,7 +238,7 @@ def cnn_method(
         strain = compute_cnn_strain(resolved_path, physical_params=physical_params)
         return save_array_result(run_dir, resolved_path, result_key, strain, resolved_file_id)
 
-    return _run_strain_tool("cnn", "CNN ", file_id, file_ids, file_path, _compute)
+    return _run_strain_tool("cnn", file_id, file_ids, file_path, _compute)
 
 
 @tool
@@ -240,7 +268,7 @@ def bnn_method(
             resolved_file_id,
         )
 
-    return _run_strain_tool("bnn", "BNN ", file_id, file_ids, file_path, _compute)
+    return _run_strain_tool("bnn", file_id, file_ids, file_path, _compute)
 
 
 TOOLS = [vector_method_g, cnn_method, bnn_method]

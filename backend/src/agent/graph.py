@@ -117,6 +117,7 @@ def strain_assistant(state: OctGraphState) -> OctGraphState:
             selected_methods=selected_methods,
             physical=physical,
             summary=summary,
+            conversation_summary=state.get("conversation_summary", ""),
         )
     )
     messages = state.get("messages", [])
@@ -126,27 +127,24 @@ def strain_assistant(state: OctGraphState) -> OctGraphState:
 
 
 def collect_result_refs(state: OctGraphState) -> OctGraphState:
-    refs = []
+    # 从末尾向前收集连续的 tool 消息，覆盖一次并行调用产生的全部结果
+    new_refs = []
     for msg in reversed(state["messages"]):
         if getattr(msg, "type", "") != "tool":
-            continue
+            break
         try:
             data = json.loads(msg.content)
         except Exception:
             continue
         if isinstance(data, dict) and data.get("status") == "success" and "ref" in data:
-            refs.append(data["ref"])
-
-    refs = list(reversed(refs))
+            new_refs.append(data["ref"])
+    if not new_refs:
+        return {}
     old_ids = {ref.get("result_id") for ref in state.get("result_refs", [])}
-    new_refs = [ref for ref in refs if ref.get("result_id") not in old_ids]
+    new_refs = [ref for ref in new_refs if ref.get("result_id") not in old_ids]
     if not new_refs:
         return {}
     return {"result_refs": new_refs}
-
-
-def judge_visualize(state: OctGraphState) -> OctGraphState:
-    return {}
 
 
 def visualize_node(state: OctGraphState) -> OctGraphState:
@@ -167,14 +165,10 @@ def visualize_node(state: OctGraphState) -> OctGraphState:
     }
 
 
-def route_after_assistant(state: OctGraphState) -> Literal["tools", "judge_visualize"]:
+def route_after_assistant(state: OctGraphState) -> Literal["tools", "visualize", "__end__"]:
     last_msg = state["messages"][-1]
     if getattr(last_msg, "tool_calls", None):
         return "tools"
-    return "judge_visualize"
-
-
-def route_after_judge(state: OctGraphState) -> str:
     if not state.get("visualization_enabled", True):
         return END
     for msg in reversed(state.get("messages", [])):
@@ -191,22 +185,16 @@ strain_builder.add_node("init_run_context", init_run_context)
 strain_builder.add_node("strain_assistant", strain_assistant)
 strain_builder.add_node("tools", ToolNode(TOOLS))
 strain_builder.add_node("collect_result_refs", collect_result_refs)
-strain_builder.add_node("judge_visualize", judge_visualize)
 strain_builder.add_node("visualize", visualize_node)
 strain_builder.add_edge(START, "init_run_context")
 strain_builder.add_edge("init_run_context", "strain_assistant")
 strain_builder.add_conditional_edges(
     "strain_assistant",
     route_after_assistant,
-    {"tools": "tools", "judge_visualize": "judge_visualize"},
+    {"tools": "tools", "visualize": "visualize", END: END},
 )
 strain_builder.add_edge("tools", "collect_result_refs")
 strain_builder.add_edge("collect_result_refs", "strain_assistant")
-strain_builder.add_conditional_edges(
-    "judge_visualize",
-    route_after_judge,
-    {"visualize": "visualize", END: END},
-)
 strain_builder.add_edge("visualize", END)
 strain_estimation = strain_builder.compile(name="strain-estimation")
 
@@ -337,7 +325,11 @@ def supervisor(state: OctGraphState) -> OctGraphState:
     """
     requested = state.get("requested_sub_agent")
     if requested:
-        return {"sub_agent": requested}
+        # 消费后立即清除：requested_sub_agent 是「本轮一次性」的显式指令
+        # （如 UI 按钮）。若不清除，在按 thread 持久化 state 的场景下它会
+        # 跨轮次残留，把后续所有输入锁死在同一子图。deep_research 的多轮
+        # 澄清改由 research_pending 续接，不依赖该字段。
+        return {"sub_agent": requested, "requested_sub_agent": None}
     if state.get("research_pending"):
         return {"sub_agent": "deep_research"}
 

@@ -60,7 +60,7 @@ class EmptyThenDocRetriever:
 
 
 def test_graph_generates_grounded_answer():
-    config = SelfRagConfig(use_hyde=False, use_cross_encoder=False)
+    config = SelfRagConfig(use_hyde=False, use_rerank=False)
     graph = build_self_rag_graph(config=config, chat_backend=FakeLLM(), retriever=FakeRetriever())
     result = graph.invoke(initial_state("What does enterprise RAG use?"))
 
@@ -72,7 +72,7 @@ def test_graph_generates_grounded_answer():
 
 
 def test_graph_rewrites_query_when_no_documents():
-    config = SelfRagConfig(use_hyde=False, use_cross_encoder=False, max_retrieval_attempts=2)
+    config = SelfRagConfig(use_hyde=False, use_rerank=False, max_retrieval_attempts=2)
     retriever = EmptyThenDocRetriever()
     graph = build_self_rag_graph(config=config, chat_backend=FakeLLM(), retriever=retriever)
     result = graph.invoke(initial_state("missing question"))

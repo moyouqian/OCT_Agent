@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from datetime import datetime
 from typing import Any, Literal
 
@@ -26,8 +26,16 @@ from agent.utils.messages import latest_user_text
 from agent.utils.structured import invoke_structured_json_schema
 
 
+# 一批 deep research 等待所有 topic 检索 + 压缩完成的总超时（秒）。
+RESEARCH_BATCH_TIMEOUT_SECONDS = 120
+
+
 def _today() -> str:
     return datetime.now().strftime("%Y-%m-%d")
+
+
+def _timed_out_note(topic: str) -> str:
+    return f"研究子问题“{topic}”在限定时间内未能完成检索或压缩，本次报告中缺失该部分资料。"
 
 
 def _latest_user_text(state: OctGraphState) -> str:
@@ -284,10 +292,22 @@ def conduct_research(state: OctGraphState) -> OctGraphState:
     topics = state.get("research_topics") or [state.get("research_brief", _latest_user_text(state))]
     notes: list[str | None] = [None] * len(topics)
 
-    with ThreadPoolExecutor(max_workers=max(1, len(topics))) as pool:
-        future_to_index = {pool.submit(_research_one_topic, topic): i for i, topic in enumerate(topics)}
-        for future in as_completed(future_to_index):
+    # 单个 topic 串联了 LLM 生成 query + 检索 + LLM 压缩，任一环节挂起都不应
+    # 无限阻塞整批研究。设总超时，未及时返回的 topic 退化为降级笔记；不等待
+    # 仍在跑的线程（cancel_futures），让最终报告环节能继续推进。
+    pool = ThreadPoolExecutor(max_workers=max(1, len(topics)))
+    future_to_index = {pool.submit(_research_one_topic, topic): i for i, topic in enumerate(topics)}
+    try:
+        for future in as_completed(future_to_index, timeout=RESEARCH_BATCH_TIMEOUT_SECONDS):
             notes[future_to_index[future]] = future.result()
+    except FuturesTimeoutError:
+        pass
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+    for index, topic in enumerate(topics):
+        if notes[index] is None:
+            notes[index] = _timed_out_note(topic)
 
     return {"research_notes": [n for n in notes if n is not None]}
 

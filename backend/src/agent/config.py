@@ -34,6 +34,13 @@ PROVIDERS: tuple[tuple[str, str, str, str], ...] = (
 
 @lru_cache(maxsize=1)
 def get_llm() -> ChatOpenAI:
+    """返回按 provider 优先级选定的 ChatOpenAI 实例。
+
+    结果被 lru_cache 缓存：provider 选择、base_url、model、LLM_TEMPERATURE
+    等环境变量只在首次调用时读取并固化到该实例。运行期这是期望行为（复用连接、
+    避免重复构造）；但测试或运行中若改了这些环境变量需手动 ``get_llm.cache_clear()``
+    才会生效。
+    """
     for name, key_env, base_env, model_env in PROVIDERS:
         api_key = os.getenv(key_env)
         if not api_key:

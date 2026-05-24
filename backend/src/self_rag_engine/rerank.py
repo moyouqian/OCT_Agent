@@ -105,8 +105,6 @@ def build_reranker(config: SelfRagConfig):
             instruction=config.rerank_instruction,
         )
     if backend == "local":
-        if not config.use_cross_encoder:
-            return None
         return CrossEncoderReranker(model_name_or_path=config.rerank_model)
     raise ValueError("SELF_RAG_RERANK_BACKEND must be cloud or local.")
 

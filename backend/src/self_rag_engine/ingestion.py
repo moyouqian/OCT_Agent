@@ -424,7 +424,7 @@ def run_batch_ingestion(
         ):
             summary[key] += int(result.get(key, 0))
         merge_result_quality(summary, result)
-    if summary["processed_files"] > 0:
+    if summary["processed_files"] > 0 or summary["failed_files"] > 0:
         from .retrieval import rebuild_bm25_files
 
         rebuild_bm25_files(config, parent_store)

@@ -38,7 +38,7 @@ def test_retriever_expands_child_hits_to_parent_documents(tmp_path: Path):
         sqlite_path=str(tmp_path / "rag.sqlite3"),
         bm25_dir=str(tmp_path / "bm25"),
         use_hyde=False,
-        use_cross_encoder=False,
+        use_rerank=False,
         retrieval_top_k=4,
         context_parent_top_k=2,
     )

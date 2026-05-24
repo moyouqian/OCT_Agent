@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
@@ -22,10 +23,11 @@ from agent.services.storage import (
     save_array_result,
 )
 from agent.services.paths import RESULTS_INDEX_PATH
-from agent.tools import bnn_method, cnn_method, compute_vector_strain
+from agent.tools import _classify_error, bnn_method, cnn_method, compute_vector_strain
+import agent.research.graph as research_graph
 from agent.graph import _research_messages, infer_route_from_text, self_rag_node, supervisor
-from agent.prompts import SUPERVISOR_PROMPT
-from agent.research.graph import _needs_research_clarification, _parse_items
+from agent.prompts import build_strain_prompt
+from agent.research.graph import _needs_research_clarification, _parse_items, conduct_research
 from agent.research.schemas import ResearchPlan
 from agent.self_rag import get_self_rag_config
 from agent.utils.structured import invoke_structured_json_schema
@@ -157,13 +159,25 @@ def test_compute_vector_strain_rejects_invalid_params(tmp_path):
         assert raised, f"compute_vector_strain should reject {bad_kwargs}"
 
 
-def test_strain_tools_return_error_text_when_no_file():
-    # 无 file_id 且 file_ids 为空 -> 共享骨架应返回友好的中文错误文案而非抛异常。
-    cnn_result = cnn_method.func(run_dir="", file_ids=[], physical_params={}, file_id="", file_path="")
-    bnn_result = bnn_method.func(run_dir="", file_ids=[], physical_params={}, file_id="", file_path="")
+def test_strain_tools_return_structured_error_when_no_file():
+    # 无 file_id 且 file_ids 为空 -> 共享骨架应返回结构化错误 JSON 而非抛异常。
+    # 缺文件由 resolve_file_reference 抛 ValueError，分类为可重试的 INVALID_PARAMS。
+    for method, run_tool in (("cnn", cnn_method), ("bnn", bnn_method)):
+        payload = json.loads(run_tool.func(run_dir="", file_ids=[], physical_params={}, file_id="", file_path=""))
+        assert payload["status"] == "error"
+        assert payload["method"] == method
+        assert payload["error_code"] == "INVALID_PARAMS"
+        assert payload["retryable"] is True
+        assert payload["error_message"]
 
-    assert "CNN" in cnn_result and "错误" in cnn_result
-    assert "BNN" in bnn_result and "错误" in bnn_result
+
+def test_classify_error_distinguishes_model_from_input_file():
+    # 模型权重缺失（.pth）须优先于通用 FILE_NOT_FOUND 命中，否则该分支不可达。
+    assert _classify_error(FileNotFoundError("assets/cnn/model.pth")) == ("MODEL_NOT_FOUND", False)
+    # 名字含 "model" 的输入 .mat 文件缺失不应被误判为模型缺失。
+    assert _classify_error(FileNotFoundError("data/uploads/x/model_scan.mat")) == ("FILE_NOT_FOUND", False)
+    assert _classify_error(ValueError("Nx 必须为正整数。")) == ("INVALID_PARAMS", True)
+    assert _classify_error(RuntimeError("CUDA out of memory")) == ("GPU_OOM", True)
 
 
 def test_requested_deep_research_routes_without_llm():
@@ -186,6 +200,20 @@ def test_requested_sub_agent_supports_all_subgraphs():
             }
         )
         assert result["sub_agent"] == requested
+
+
+def test_requested_sub_agent_is_cleared_after_routing():
+    # requested_sub_agent 是「本轮一次性」指令，消费后须置 None，
+    # 否则在按 thread 持久化 state 的场景会跨轮次把路由锁死在同一子图。
+    result = supervisor(
+        {
+            "messages": [HumanMessage(content="随便一句话")],
+            "requested_sub_agent": "self_rag",
+        }
+    )
+
+    assert result["sub_agent"] == "self_rag"
+    assert result["requested_sub_agent"] is None
 
 
 def test_route_keywords_cover_research_and_strain():
@@ -310,10 +338,6 @@ def test_knowledge_api_rejects_unsupported_upload():
     assert response.status_code == 400
 
 
-def test_prompts_are_importable():
-    assert "deep_research" in SUPERVISOR_PROMPT
-
-
 def test_deep_research_context_trims_unrelated_history():
     messages = [
         HumanMessage(content="你好"),
@@ -326,6 +350,47 @@ def test_deep_research_context_trims_unrelated_history():
     trimmed = _research_messages({"messages": messages})
 
     assert trimmed == [messages[-1]]
+
+
+def test_strain_prompt_injects_conversation_summary():
+    physical = {"wavelength": 840e-9, "bandwidth": 50e-9, "refractive_index": 1.0}
+    summary_text = "用户此前约定 Nx=15、折射率=1.36。"
+    prompt = build_strain_prompt(
+        run_dir="run",
+        file_ids=["abc"],
+        selected_methods=[],
+        physical=physical,
+        summary="无结果",
+        conversation_summary=summary_text,
+    )
+
+    assert summary_text in prompt
+    # 不传摘要时不应出现摘要段落，避免污染上下文。
+    bare = build_strain_prompt(
+        run_dir="run",
+        file_ids=["abc"],
+        selected_methods=[],
+        physical=physical,
+        summary="无结果",
+    )
+    assert "早期对话摘要" not in bare
+
+
+def test_conduct_research_degrades_on_timeout(monkeypatch):
+    # 让单个 topic 超过总超时仍未返回 -> 该 topic 应退化为降级笔记而非阻塞。
+    monkeypatch.setattr(research_graph, "RESEARCH_BATCH_TIMEOUT_SECONDS", 0.05)
+
+    def _slow_topic(topic):
+        time.sleep(2)
+        return f"never returns for {topic}"
+
+    monkeypatch.setattr(research_graph, "_research_one_topic", _slow_topic)
+
+    result = conduct_research({"research_topics": ["卡住的子问题"]})
+    notes = result["research_notes"]
+
+    assert len(notes) == 1
+    assert "未能完成" in notes[0]
 
 
 def test_pending_deep_research_keeps_recent_clarification_context():

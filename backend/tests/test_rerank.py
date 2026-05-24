@@ -40,11 +40,7 @@ def test_cloud_reranker_orders_results_by_provider_indexes():
     assert requests[0][2]["Authorization"] == "Bearer sk-test"
 
 
-def test_build_reranker_does_not_load_local_cross_encoder_when_disabled():
-    config = SelfRagConfig(
-        use_rerank=True,
-        rerank_backend="local",
-        use_cross_encoder=False,
-    )
+def test_build_reranker_returns_none_when_disabled():
+    config = SelfRagConfig(use_rerank=False)
 
     assert build_reranker(config) is None

@@ -24,14 +24,14 @@ def run_query_cli(argv) -> None:
     parser = argparse.ArgumentParser(description="Run the independent LangGraph Self-RAG flow.")
     parser.add_argument("question", help="Question to ask against the indexed document store.")
     parser.add_argument("--no-hyde", action="store_true", help="Disable HyDE retrieval expansion.")
-    parser.add_argument("--no-cross-encoder", action="store_true", help="Disable cross-encoder reranking.")
+    parser.add_argument("--no-rerank", action="store_true", help="Disable reranking.")
     args = parser.parse_args(argv)
 
     config = SelfRagConfig()
     if args.no_hyde:
         config.use_hyde = False
-    if args.no_cross_encoder:
-        config.use_cross_encoder = False
+    if args.no_rerank:
+        config.use_rerank = False
     result = run_self_rag(args.question, config=config)
 
     print("\nAnswer:\n")

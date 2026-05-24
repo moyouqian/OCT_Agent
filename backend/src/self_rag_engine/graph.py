@@ -128,9 +128,16 @@ def build_self_rag_graph(
     def generate(state: SelfRagState) -> SelfRagState:
         attempt_count = state.get("attempt_count", 0) + 1
         generation_attempt_count = state.get("generation_attempt_count", 0) + 1
+        grading_trace = state.get("grading_trace", [])
+        feedback = None
+        if grading_trace:
+            last = grading_trace[-1]
+            groundedness = last.get("groundedness", {})
+            if not _as_yes(groundedness.get("binary_score")):
+                feedback = groundedness.get("reason")
         try:
             generation = llm.generate(
-                generation_messages(state["question"], state.get("documents", [])),
+                generation_messages(state["question"], state.get("documents", []), feedback=feedback),
                 temperature=0.2,
                 max_tokens=config.generation_max_tokens,
             )

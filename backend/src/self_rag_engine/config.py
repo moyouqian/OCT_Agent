@@ -109,13 +109,7 @@ class SelfRagConfig:
         default_factory=lambda: int(os.getenv("SELF_RAG_DOCLING_AUTO_OCR_MIN_TEXT_CHARS", "300"))
     )
     use_hyde: bool = field(default_factory=lambda: _env_bool("SELF_RAG_USE_HYDE", True))
-    use_cross_encoder: bool = field(default_factory=lambda: _env_bool("SELF_RAG_USE_CROSS_ENCODER", True))
-    use_rerank: bool = field(
-        default_factory=lambda: _env_bool(
-            "SELF_RAG_USE_RERANK",
-            _env_bool("SELF_RAG_USE_CROSS_ENCODER", True),
-        )
-    )
+    use_rerank: bool = field(default_factory=lambda: _env_bool("SELF_RAG_USE_RERANK", True))
     rerank_backend: str = field(default_factory=lambda: os.getenv("SELF_RAG_RERANK_BACKEND", "local"))
     rerank_model: str = field(
         default_factory=lambda: os.getenv("SELF_RAG_RERANK_MODEL", "./models/ms-marco-MiniLM-L-6-v2")

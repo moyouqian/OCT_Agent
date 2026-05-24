@@ -82,12 +82,21 @@ def rewrite_messages(question: str) -> List[Dict[str, str]]:
     ]
 
 
-def generation_messages(question: str, documents: List[Document]) -> List[Dict[str, str]]:
+def generation_messages(
+    question: str, documents: List[Document], feedback: str | None = None
+) -> List[Dict[str, str]]:
+    feedback_block = (
+        f"Your previous answer was rejected for the following reason: {feedback}\n"
+        "Please revise your answer using only the context below.\n\n"
+        if feedback
+        else ""
+    )
     return [
         {"role": "system", "content": CONTEXT_ONLY_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
+                f"{feedback_block}"
                 "Use the following context to answer the question.\n\n"
                 f"{format_context(documents)}\n\n"
                 f"Question: {question}\n\n"
