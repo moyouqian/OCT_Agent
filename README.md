@@ -1,6 +1,6 @@
 # OCT Agent
 
-基于 LangGraph 的多智能体科研助手，面向 **OCT（光学相干断层成像）应变估计**。
+基于 LangGraph 的多智能体科研助手，面向 **OCT（光学相干断层成像）**。
 它把科学计算、联网文献调研、本地知识库检索整合进同一个对话式界面：用户用自然语言提问、上传 `.mat` 附件，结果以聊天消息 + 右侧交互式热力图面板的形式呈现。
 
 > 主体验是「自然语言对话 + 附件 + artifact 结果面板」，能力通过 LangGraph 子图横向扩展，而非单一的应变计算工具。
@@ -11,7 +11,6 @@
 
 | 子图 | 作用 | 触发方式 |
 |---|---|---|
-| **Chat** | 通用问答、OCT 概念解释、长期记忆管理 | 记忆命令（`记住` / `忘记` / `查看记忆` / `清除摘要`），或检索闸门判定为闲聊时兜底 |
 | **Strain Estimation** | OCT 应变计算，LLM 自主决定调用哪种方法 | 出现「计算 / 估计 / 运行…」等动作意图词，或已上传 `.mat` 文件 |
 | **Deep Research** | 7 步深度研究流水线，输出带来源的 Markdown 综述 | 前端 `Deep Research` 按钮，或「文献 / 综述 / 调研 / 最新…」等意图词 |
 | **Self-RAG** | 本地论文 / 笔记知识库的混合检索问答 | 「知识库 / 本地检索 / 论文库…」等关键词，或作为路由兜底 |
@@ -118,7 +117,7 @@ OCT_Agent/
 ├── backend/
 │   ├── langgraph.json           # 图入口 + FastAPI 挂载 + .env 路径
 │   ├── src/agent/
-│   │   ├── graph.py             # Supervisor + 4 个子图编排
+│   │   ├── graph.py             # Supervisor + 3 个子图编排
 │   │   ├── prompts.py           # 所有 system prompt（集中管理，禁止内联）
 │   │   ├── tools.py             # @tool 应变计算函数
 │   │   ├── schemas.py           # OctGraphState 及全部 TypedDict
