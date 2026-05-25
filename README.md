@@ -138,13 +138,7 @@ OCT_Agent/
 └── Makefile
 ```
 
----
 
-## 开发约定
 
-- **新增应变方法**：在 `tools.py` 用 `@tool` 实现并加入 `TOOLS`，更新 `prompts.py` 的 `build_strain_prompt()`，补充测试。
-- **修改提示词**：只改 `prompts.py` 的 builder 函数，**不要**在图节点里内联大段 system prompt。
-- **前端 API 变更**：先改 `frontend/src/types/api.ts`，再改 `frontend/src/lib/api.ts`。
-- **结果可视化**：前端通过 `GET /api/results/{result_id}/array?name=strain` 取数组并用 Plotly 渲染。
 
-设计决策记录见 [`AGENT.md`](./AGENT.md)。
+
