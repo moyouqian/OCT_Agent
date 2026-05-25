@@ -252,3 +252,8 @@ __marimo__/
 
 # 内部计划文档（skill 生成，不入库）
 docs/superpowers/
+
+# 本地开发文件（不入库）
+/CLAUDE.md
+/strain_estimation.ipynb
+/scripts/

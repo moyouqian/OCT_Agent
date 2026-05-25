@@ -147,4 +147,4 @@ OCT_Agent/
 - **前端 API 变更**：先改 `frontend/src/types/api.ts`，再改 `frontend/src/lib/api.ts`。
 - **结果可视化**：前端通过 `GET /api/results/{result_id}/array?name=strain` 取数组并用 Plotly 渲染。
 
-更多面向 Claude Code 的工作指引见 [`CLAUDE.md`](./CLAUDE.md)，设计决策记录见 [`AGENT.md`](./AGENT.md)。
+设计决策记录见 [`AGENT.md`](./AGENT.md)。
